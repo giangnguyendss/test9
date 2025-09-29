@@ -1,0 +1,132 @@
+Feature: Real-time streaming of patient data from S3 to patient_data_auto_loader
+
+  Background:
+    Given the Unity Catalog is purgo_databricks and schema is purgo_playground
+    And the target table is patient_data_auto_loader with columns:
+      | patient_id (string) | patient_name (string) | age (string) | diagnosis (string) | treatment (string) | data_loaded_at (timestamp) |
+    And the schema location is "/mnt/checkpoints/s3_autoloader/patient_al_schema"
+    And the checkpoint location is "/mnt/checkpoints/patient_al_cp/"
+    And Spark S3 access is configured using access_key and secret_key from Databricks secret scope "aws_keys"
+    And the S3 folder path is dynamically retrieved from the s3_landing_path column of ingest_config_master where source_object_name contains "patient_data" and active_flag = "Y"
+    And the delimiter for CSV is retrieved from the delimiter column of ingest_config_master, defaulting to "," if not present
+
+  Scenario Outline: Stream valid patient data CSV file from S3 and append to patient_data_auto_loader
+    Given a new CSV file "<file_name>" arrives in S3 folder "<s3_landing_path>"
+    And the CSV file has columns: patient_id, patient_name, age, diagnosis, treatment
+    And all columns are read as String type
+    When the streaming job processes the file
+    Then a new row is appended to patient_data_auto_loader with:
+      | patient_id      | patient_name      | age   | diagnosis      | treatment      | data_loaded_at         |
+      | <patient_id>    | <patient_name>    | <age> | <diagnosis>    | <treatment>    | <current_timestamp>    |
+
+    Examples:
+      | file_name         | s3_landing_path                | patient_id | patient_name | age | diagnosis   | treatment   |
+      | patient_001.csv   | s3://purgo/patient_data/2024/  | P001       | John Smith   | 45  | Diabetes    | Insulin     |
+      | patient_002.csv   | s3://purgo/patient_data/2024/  | P002       | Jane Doe     | 38  | Hypertension| Beta Blocker|
+      | patient_003.csv   | s3://purgo/patient_data/2024/  | P003       | Alice Lee    | 29  | Asthma      | Inhaler     |
+
+  Scenario: Multiple active patient_data configs in ingest_config_master
+    Given ingest_config_master contains multiple rows where source_object_name contains "patient_data" and active_flag = "Y"
+    When the streaming job starts
+    Then all matching s3_landing_path values are used to monitor for new patient data files
+
+  Scenario: S3 credentials are missing in Databricks secret scope
+    Given the Databricks secret scope "aws_keys" does not contain "access_key" or "secret_key"
+    When the streaming job attempts to access S3
+    Then the job fails with error "Missing S3 credentials in secret scope aws_keys"
+
+  Scenario: S3 credentials are invalid
+    Given the Databricks secret scope "aws_keys" contains invalid "access_key" or "secret_key"
+    When the streaming job attempts to access S3
+    Then the job fails with error "Invalid S3 credentials"
+
+  Scenario Outline: CSV file missing required columns
+    Given a new CSV file "<file_name>" arrives in S3 folder "<s3_landing_path>"
+    And the CSV file is missing required column "<missing_column>"
+    When the streaming job processes the file
+    Then the job fails with error "Missing required column <missing_column> in file <file_name>"
+
+    Examples:
+      | file_name         | s3_landing_path                | missing_column |
+      | patient_004.csv   | s3://purgo/patient_data/2024/  | patient_id     |
+      | patient_005.csv   | s3://purgo/patient_data/2024/  | diagnosis      |
+
+  Scenario Outline: CSV file contains type mismatches
+    Given a new CSV file "<file_name>" arrives in S3 folder "<s3_landing_path>"
+    And the CSV file has a value "<bad_value>" in column "<column>" that cannot be read as String
+    When the streaming job processes the file
+    Then the job fails with error "Type mismatch in column <column> for value <bad_value> in file <file_name>"
+
+    Examples:
+      | file_name         | s3_landing_path                | column      | bad_value      |
+      | patient_006.csv   | s3://purgo/patient_data/2024/  | age         | [binary blob]  |
+
+  Scenario: CSV file with extra columns
+    Given a new CSV file "patient_007.csv" arrives in S3 folder "s3://purgo/patient_data/2024/"
+    And the CSV file has extra columns not defined in schema
+    When the streaming job processes the file
+    Then only columns patient_id, patient_name, age, diagnosis, treatment are loaded as String, extra columns are ignored
+
+  Scenario: CSV file with duplicate rows
+    Given a new CSV file "patient_008.csv" arrives in S3 folder "s3://purgo/patient_data/2024/"
+    And the CSV file contains duplicate rows
+    When the streaming job processes the file
+    Then all rows are appended to patient_data_auto_loader (no deduplication is performed)
+
+  Scenario: CSV file with empty values
+    Given a new CSV file "patient_009.csv" arrives in S3 folder "s3://purgo/patient_data/2024/"
+    And the CSV file has empty values in some columns
+    When the streaming job processes the file
+    Then the corresponding columns in patient_data_auto_loader are set to null
+
+  Scenario: ingest_config_master has no active patient_data config
+    Given ingest_config_master has no row where source_object_name contains "patient_data" and active_flag = "Y"
+    When the streaming job starts
+    Then the job fails with error "No active patient_data config found in ingest_config_master"
+
+  Scenario Outline: Delimiter is not specified in config
+    Given ingest_config_master row for patient_data has delimiter column empty
+    When the streaming job reads CSV files
+    Then the default delimiter "," is used
+
+    Examples:
+      | config_id | source_object_name | delimiter |
+      | C001      | patient_data_2024  |           |
+
+  Scenario Outline: Delimiter is specified in config
+    Given ingest_config_master row for patient_data has delimiter "<delimiter>"
+    When the streaming job reads CSV files
+    Then delimiter "<delimiter>" is used
+
+    Examples:
+      | config_id | source_object_name | delimiter |
+      | C002      | patient_data_2024  | ;         |
+      | C003      | patient_data_2024  | |         |
+
+  Scenario: Streaming job uses schema location and checkpoint location
+    Given the streaming job is configured with schema location "/mnt/checkpoints/s3_autoloader/patient_al_schema"
+    And checkpoint location "/mnt/checkpoints/patient_al_cp/"
+    When the job runs
+    Then schema evolution and state are managed using these locations
+
+  Scenario: data_loaded_at is populated with current timestamp
+    Given a new row is appended to patient_data_auto_loader
+    When the streaming job processes a patient data record
+    Then data_loaded_at is set to the current timestamp at load time
+
+  Scenario: Streaming job continues to append new files
+    Given new patient data CSV files continue to arrive in S3
+    When the streaming job is running
+    Then each new file is appended to patient_data_auto_loader in real time
+
+  Scenario: Streaming job ignores non-patient_data configs
+    Given ingest_config_master contains configs where source_object_name does not contain "patient_data"
+    When the streaming job starts
+    Then those configs are ignored for patient data streaming
+
+  Scenario: Streaming job supports multiple S3 folders for patient_data
+    Given ingest_config_master contains multiple active configs for patient_data with different s3_landing_path values
+    When the streaming job starts
+    Then all specified S3 folders are monitored for new patient data files
+
+# END
