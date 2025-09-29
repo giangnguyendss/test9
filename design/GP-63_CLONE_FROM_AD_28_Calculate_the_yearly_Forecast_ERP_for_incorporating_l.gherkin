@@ -1,0 +1,118 @@
+Feature: Forecast ERP SQL logic for f_inv_movmnt report generation
+
+  Background:
+    Given the Unity Catalog is purgo_databricks and schema is purgo_playground
+    And the mapping table inv_txn_mapping.xlsx defines field logic for f_order and f_inv_movmnt
+    And supporting tables/views include vw_calculated_allocated_qty, f_inv_movmnt_apl_qty, f_inv_movmnt_apl_qty_result, f_inv_movmnt_apl_qty_test
+
+  Scenario Outline: Generate forecast report row for f_inv_movmnt with mapped fields
+    Given a left outer join between f_inv_movmnt and f_order on <ord_id>, <ord_line_nbr>, <b_dt>
+    And allocated_qty is calculated as sum(qty_1, qty_2, qty_3, qty_4) for each order and line number
+    And delivery_dt is set to current date in yyyymmdd format
+    And sched_dt is sourced from yeblen.drdat in yyyymmdd format
+    And flag_key is true if txn_id is present, else false
+    When the SQL logic is executed
+    Then the output row contains:
+      | txn_id | allocated_qty | delivery_dt | sched_dt | flag_key |
+    And allocated_qty is a decimal, default 0.00 if missing
+    And delivery_dt and sched_dt are decimals (38,0) in yyyymmdd format
+    And flag_key is boolean (true/false)
+    And all data quality rules are enforced per mapping
+
+    Examples:
+      | ord_id   | ord_line_nbr | b_dt      | qty_1 | qty_2 | qty_3 | qty_4 | txn_id      | yeblen_drdat | expected_allocated_qty | expected_flag_key |
+      | ORD001   | 10           | 20240601  | 5.0   | 2.0   | 0.0   | 1.0   | TXN123      | 20240605     | 8.0                   | true             |
+      | ORD002   | 20           | 20240602  | 0.0   | 0.0   | 0.0   | 0.0   |             | 20240606     | 0.0                   | false            |
+      | ORD003   | 30           | 20240603  | 3.5   | 2.5   | 1.0   | 0.0   | TXN456      | 20240607     | 7.0                   | true             |
+      | ORD004   | 40           | 20240604  | null  | 1.0   | 2.0   | 3.0   | TXN789      | 20240608     | 6.0                   | true             |
+      | ORD005   | 50           | 20240605  | 2.0   | null  | null  | null  |             | 20240609     | 2.0                   | false            |
+
+  Scenario: Validate allocated_qty decimal type and default value
+    Given allocated_qty is calculated from qty_1, qty_2, qty_3, qty_4
+    When any qty_x is missing or null
+    Then treat missing values as 0.0
+    And allocated_qty is a decimal value
+    And if all qty_x are missing, allocated_qty is 0.00
+
+  Scenario: Validate delivery_dt and sched_dt format
+    Given delivery_dt and sched_dt are required in yyyymmdd format
+    When source date is not in yyyymmdd format
+    Then transform to yyyymmdd as decimal(38,0)
+    And raise error "Invalid date format for delivery_dt/sched_dt" if transformation fails
+
+  Scenario: Validate flag_key logic
+    Given flag_key is true if txn_id is present, else false
+    When txn_id is not present or is null
+    Then flag_key is false
+    When txn_id is present and not null
+    Then flag_key is true
+
+  Scenario Outline: Data quality validation for forecast report row
+    Given a forecast report row with <allocated_qty>, <delivery_dt>, <sched_dt>, <flag_key>
+    When the row is validated
+    Then allocated_qty must be decimal, default 0.00
+    And delivery_dt and sched_dt must be decimal(38,0) in yyyymmdd format
+    And flag_key must be boolean (true/false)
+    And if any field fails validation, error message is returned
+
+    Examples:
+      | allocated_qty | delivery_dt | sched_dt  | flag_key | expected_error                        |
+      | 8.0           | 20240601    | 20240605  | true     |                                       |
+      | null          | 20240602    | 20240606  | false    |                                       |
+      | 7.0           | 20240603    | 20240607  | true     |                                       |
+      | 6.0           | 20240604    | 20240608  | true     |                                       |
+      | 2.0           | 20240605    | 20240609  | false    |                                       |
+      | "abc"         | 20240610    | 20240611  | true     | "allocated_qty must be decimal"       |
+      | 5.0           | "2024-06-12"| 20240613  | true     | "delivery_dt must be yyyymmdd format" |
+      | 4.0           | 20240614    | "2024-06-15"| false   | "sched_dt must be yyyymmdd format"    |
+      | 3.0           | 20240616    | 20240617  | "yes"    | "flag_key must be boolean"            |
+
+  Scenario: Duplicate order and line number handling
+    Given multiple rows with same ord_id and ord_line_nbr
+    When generating allocated_qty
+    Then sum qty_1, qty_2, qty_3, qty_4 for all matching rows
+    And output a single row per unique ord_id and ord_line_nbr
+
+  Scenario: Missing f_order join data
+    Given f_inv_movmnt row with no matching f_order entry
+    When joining for allocated_qty
+    Then allocated_qty is set to 0.00
+    And flag_key is false
+
+  Scenario: SQL logic error handling
+    Given a SQL execution error occurs (e.g., type mismatch, missing field)
+    When generating the forecast report
+    Then output error message with field and reason
+
+    Examples:
+      | error_type         | field           | reason                        | expected_error_message                  |
+      | TypeMismatch       | allocated_qty   | Non-decimal value             | "allocated_qty must be decimal"         |
+      | MissingField       | delivery_dt     | Field not found               | "delivery_dt is required"               |
+      | FormatError        | sched_dt        | Not yyyymmdd                  | "sched_dt must be yyyymmdd format"      |
+      | NullValue          | flag_key        | Null not allowed              | "flag_key must be boolean"              |
+
+  Scenario: Data quality enforcement for valid values
+    Given the mapping specifies valid values for each field
+    When a field value is outside allowed range or type
+    Then error message is returned and row is excluded from report
+
+  Scenario Outline: Representative error path cases for forecast report
+    Given input data with <allocated_qty>, <delivery_dt>, <sched_dt>, <flag_key>
+    When SQL logic is executed
+    Then if any field fails validation, error message is returned
+
+    Examples:
+      | allocated_qty | delivery_dt | sched_dt  | flag_key | expected_error_message                  |
+      | "abc"         | 20240601    | 20240605  | true     | "allocated_qty must be decimal"         |
+      | 8.0           | "2024-06-01"| 20240605  | true     | "delivery_dt must be yyyymmdd format"   |
+      | 7.0           | 20240603    | "2024-06-07"| true    | "sched_dt must be yyyymmdd format"      |
+      | 6.0           | 20240604    | 20240608  | "yes"    | "flag_key must be boolean"              |
+      | null          | 20240605    | 20240609  | false    |                                         |
+
+  Scenario: Output structure for forecast report
+    Given the forecast report is generated for f_inv_movmnt
+    Then output contains columns:
+      | txn_id | allocated_qty | delivery_dt | sched_dt | flag_key |
+    And all columns conform to mapping and data quality rules
+
+# END
