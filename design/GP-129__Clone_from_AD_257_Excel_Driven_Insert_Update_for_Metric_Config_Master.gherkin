@@ -1,0 +1,139 @@
+Feature: Upsert Excel Data into metric_config and metric_master Tables
+
+  Background:
+    Given the Excel sheet is loaded into staging tables: metric_config_stg and metric_master_stg
+    And the target tables are purgo_playground.metric_config and purgo_playground.metric_master in Unity Catalog purgo_databricks
+
+  # ------------------ metric_config upsert logic ------------------
+
+  Scenario Outline: Upsert metric_config row based on metric_id
+    Given a row in metric_config_stg with metric_id "<metric_id>"
+    When checking if metric_id "<metric_id>" exists in purgo_playground.metric_config
+    Then if not exists, insert the row with all columns from staging
+    And if exists, update all columns in purgo_playground.metric_config with values from staging
+
+    Examples:
+      | metric_id              | active_indicator | metric_data_type | metric_description                  | metric_template_name | metric_type | source_table                                         | table_type | target_table                                         | primary_key   |
+      | evenity_unit_hash      | Y               | String          | hash value of product level, ...    | evenity_unit_hash   | Custom     | purgo_playground.s_field_reporting_sales_source_customer | customer   | purgo_playground.s_field_reporting_sales_source_customer_metric | pt_cdl_uuid   |
+      | customer_first_metric  | Y               |                 | First purchased columns of a customer| customer_first_metric| Custom     | purgo_playground.d_product_revenue                    | Product    | purgo_playground.d_product_revenue_metric             | product_id    |
+      | final_css              | Y               | Double          | Normalised Customer Satisfaction Score| final_css          | Custom     | purgo_playground.health_insurance_claims              | HCP        | purgo_playground.health_insurance_claims_metric        | Claim_ID      |
+      | batch_number           | N               | String          | Batch number of product             | batch_number        | Custom     | purgo_playground.d_product_revenue                    | Product    | purgo_playground.d_product_revenue_metric             | product_id    |
+
+  Scenario Outline: Validation error for missing required metric_config fields
+    Given a row in metric_config_stg with metric_id "<metric_id>"
+    When required field "<missing_field>" is missing or NULL
+    Then the upsert fails with error "Missing required field: <missing_field> for metric_id <metric_id>"
+
+    Examples:
+      | metric_id             | missing_field         |
+      | evenity_unit_hash     | metric_id             |
+      | batch_number          | metric_template_name  |
+      | final_css             | metric_type           |
+
+  Scenario Outline: Validation error for invalid metric_config data type
+    Given a row in metric_config_stg with metric_id "<metric_id>"
+    When field "<field>" has invalid type "<invalid_value>"
+    Then the upsert fails with error "Invalid type for <field>: <invalid_value> in metric_id <metric_id>"
+
+    Examples:
+      | metric_id             | field              | invalid_value |
+      | final_css             | metric_data_type   | 123           |
+      | batch_number          | active_indicator   | 5             |
+
+  Scenario Outline: Duplicate metric_id in staging
+    Given multiple rows in metric_config_stg with the same metric_id "<metric_id>"
+    When attempting upsert
+    Then the upsert fails with error "Duplicate metric_id <metric_id> in staging data"
+
+    Examples:
+      | metric_id             |
+      | evenity_unit_hash     |
+      | final_css             |
+
+  # ------------------ metric_master upsert logic ------------------
+
+  Scenario Outline: Upsert metric_master row based on (metric_template_name, dependency)
+    Given a row in metric_master_stg with metric_template_name "<metric_template_name>" and dependency <dependency>
+    When checking if a row with metric_template_name "<metric_template_name>" and dependency <dependency> exists in purgo_playground.metric_master
+    Then if not exists, insert the row with all columns from staging
+    And if exists, update all columns in purgo_playground.metric_master with values from staging
+
+    Examples:
+      | metric_template_name   | sql_query                                   | metric_type | view_name   | dependency |
+      | evenity_unit_hash      | SELECT * FROM ...                           | Custom      | eve_view    | 1          |
+      | customer_first_metric  | SELECT product_id, ...                      | Custom      |             | 1          |
+      | final_css              | SELECT *, CASE WHEN ...                     | Custom      | css_data    | 2          |
+      | final_css              | WITH css_stats AS ...                       | Custom      |             | 3          |
+      | final_css              | SELECT h.*, c.id, ...                       | Custom      | joined_data | 1          |
+      | evenity_unit_hash      | SELECT pt_cdl_uuid, HASH(...)               | Custom      |             | 2          |
+      | batch_number           | SELECT product_id, get_json_object(...)     | Custom      |             | 1          |
+
+  Scenario Outline: Validation error for missing required metric_master fields
+    Given a row in metric_master_stg with metric_template_name "<metric_template_name>" and dependency <dependency>
+    When required field "<missing_field>" is missing or NULL
+    Then the upsert fails with error "Missing required field: <missing_field> for metric_template_name <metric_template_name> and dependency <dependency>"
+
+    Examples:
+      | metric_template_name   | dependency | missing_field   |
+      | final_css              | 2          | sql_query       |
+      | batch_number           | 1          | metric_type     |
+      | evenity_unit_hash      | 1          | metric_template_name |
+
+  Scenario Outline: Validation error for invalid metric_master data type
+    Given a row in metric_master_stg with metric_template_name "<metric_template_name>" and dependency <dependency>
+    When field "<field>" has invalid type "<invalid_value>"
+    Then the upsert fails with error "Invalid type for <field>: <invalid_value> in metric_template_name <metric_template_name> and dependency <dependency>"
+
+    Examples:
+      | metric_template_name   | dependency | field        | invalid_value |
+      | final_css              | 2          | dependency   | "abc"         |
+      | batch_number           | 1          | metric_type  | 123           |
+
+  Scenario Outline: Duplicate (metric_template_name, dependency) in staging
+    Given multiple rows in metric_master_stg with the same metric_template_name "<metric_template_name>" and dependency <dependency>
+    When attempting upsert
+    Then the upsert fails with error "Duplicate metric_master key (metric_template_name: <metric_template_name>, dependency: <dependency>) in staging data"
+
+    Examples:
+      | metric_template_name   | dependency |
+      | final_css              | 2          |
+      | evenity_unit_hash      | 1          |
+
+  # ------------------ General error handling ------------------
+
+  Scenario Outline: Type mismatch between staging and target table
+    Given a row in staging with field "<field>" value "<value>"
+    When the value type does not match the target table schema
+    Then the upsert fails with error "Type mismatch for <field>: <value>"
+
+    Examples:
+      | field              | value         |
+      | dependency         | "not_a_number"|
+      | metric_id          | 123           |
+      | metric_type        | 999           |
+
+  Scenario Outline: NULL-safe matching for metric_master upsert
+    Given a row in metric_master_stg with metric_template_name "<metric_template_name>" and dependency <dependency>
+    When matching to purgo_playground.metric_master, treat NULLs as equal only if both are NULL
+    Then upsert is performed only if (metric_template_name, dependency) is not present (NULL-safe)
+
+    Examples:
+      | metric_template_name   | dependency |
+      | final_css              | NULL       |
+      | batch_number           | 1          |
+
+  # ------------------ Success confirmation ------------------
+
+  Scenario Outline: Successful upsert confirmation
+    Given a valid row in staging for "<table>" with key "<key>"
+    When upsert completes successfully
+    Then the row in "<table>" matches the Excel data for key "<key>"
+
+    Examples:
+      | table                  | key                        |
+      | metric_config          | evenity_unit_hash          |
+      | metric_master          | (final_css, 2)             |
+      | metric_config          | batch_number               |
+      | metric_master          | (customer_first_metric, 1) |
+
+# END
