@@ -1,141 +1,65 @@
-Feature: Automate migration of eligible files from Purgo S3 landing folder to archive folder using Databricks PySpark
+Feature: Automate migration of files from Purgo S3 landing folder to archive folder
 
   Background:
-    Given Databricks workspace is configured with Unity Catalog "purgo_databricks" and schema "purgo_playground"
-    And AWS credentials "access_key" and "secret_key" are stored in Databricks secret scope "aws_keys"
-    And the table "purgo_playground.s3_file_process_log" contains file migration metadata
+    Given the Databricks secret scope "aws_keys" is set up with access_key and secret_key
+    And the Unity Catalog is set to "purgo_databricks" and schema is set to "purgo_playground"
 
-  Scenario Outline: Migrate eligible files from S3 landing to archive folder
-    Given the script reads all rows from "purgo_playground.s3_file_process_log"
-    And the following file metadata is present:
-      | file_name      | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date |
-      | <file_name>    | <s3_landing_path>                        | <s3_archive_path>                        | <file_status> | <file_processed_date> |
-    When the script filters for files where file_status = 'SUCCESS'
-    And for each eligible file, it reads s3_landing_path and s3_archive_path
-    And it uses AWS credentials from secret scope "aws_keys" to access S3
-    And it moves the file "<file_name>" from "<s3_landing_path>" to "<s3_archive_path>"
-    Then the file "<file_name>" is present in "<s3_archive_path>"
-    And the file "<file_name>" is no longer present in "<s3_landing_path>"
-    And no changes are made to "purgo_playground.s3_file_process_log" table
+  Scenario Outline: Successful file migration
+    Given the s3_file_process_log table has the following records:
+      | file_name | s3_landing_path                              | s3_archive_path                              | file_status |
+      | <file_name> | <s3_landing_path> | <s3_archive_path> | SUCCESS    |
+    When the PySpark script is executed
+    Then the file is moved from s3_landing_path to s3_archive_path
+    And the wrk_s3_file_migration_audit table has a new record with:
+      | file_name | action | source_path | target_path | status | reason | timestamp |
+      | <file_name> | MOVE   | <s3_landing_path> | <s3_archive_path> | SUCCESS |  | <current_timestamp> |
 
     Examples:
-      | file_name         | s3_landing_path                                         | s3_archive_path                                         | file_status | file_processed_date      |
-      | patient_001.csv   | s3://bucket/filestore/purgo/patient_raw                 | s3://bucket/filestore/purgo/patient_archive             | SUCCESS     | 2024-06-01T10:00:00Z     |
-      | lab_202406.csv    | s3://bucket/filestore/purgo/lab_raw                     | s3://bucket/filestore/purgo/lab_archive                 | SUCCESS     | 2024-06-02T11:00:00Z     |
-      | visit_123.json    | s3://bucket/filestore/purgo/visit_raw                   | s3://bucket/filestore/purgo/visit_archive               | SUCCESS     | 2024-06-03T12:00:00Z     |
-      | patient_002.csv   | s3://bucket/filestore/purgo/patient_raw                 | s3://bucket/filestore/purgo/patient_archive             | SUCCESS     | 2024-06-04T13:00:00Z     |
-      | imaging_abc.dcm   | s3://bucket/filestore/purgo/imaging_raw                 | s3://bucket/filestore/purgo/imaging_archive             | SUCCESS     | 2024-06-05T14:00:00Z     |
+      | file_name | s3_landing_path                              | s3_archive_path                              |
+      | file1.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://agilisium-playground-dev/filestore/purgo/patient_raw_archive |
+      | file2.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://agilisium-playground-dev/filestore/purgo/patient_raw_archive |
 
-  Scenario Outline: Skip files with file_status not equal to 'SUCCESS'
-    Given the script reads all rows from "purgo_playground.s3_file_process_log"
-    And the following file metadata is present:
-      | file_name      | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date |
-      | <file_name>    | <s3_landing_path>                        | <s3_archive_path>                        | <file_status> | <file_processed_date> |
-    When the script filters for files where file_status = 'SUCCESS'
-    Then the file "<file_name>" is not migrated
-    And the file remains in "<s3_landing_path>"
-    And no changes are made to "purgo_playground.s3_file_process_log" table
+  Scenario Outline: File not found in s3_landing_path
+    Given the s3_file_process_log table has the following records:
+      | file_name | s3_landing_path                              | s3_archive_path                              | file_status |
+      | <file_name> | <s3_landing_path> | <s3_archive_path> | SUCCESS    |
+    And the file does not exist in s3_landing_path
+    When the PySpark script is executed
+    Then the file is not moved
+    And the wrk_s3_file_migration_audit table has a new record with:
+      | file_name | action | source_path | target_path | status | reason | timestamp |
+      | <file_name> | MOVE   | <s3_landing_path> | <s3_archive_path> | FAILED | File not found | <current_timestamp> |
 
     Examples:
-      | file_name         | s3_landing_path                                         | s3_archive_path                                         | file_status | file_processed_date      |
-      | patient_003.csv   | s3://bucket/filestore/purgo/patient_raw                 | s3://bucket/filestore/purgo/patient_archive             | FAILED      | 2024-06-06T15:00:00Z     |
-      | lab_202407.csv    | s3://bucket/filestore/purgo/lab_raw                     | s3://bucket/filestore/purgo/lab_archive                 | IN_PROGRESS | 2024-06-07T16:00:00Z     |
-      | visit_124.json    | s3://bucket/filestore/purgo/visit_raw                   | s3://bucket/filestore/purgo/visit_archive               | ERROR       | 2024-06-08T17:00:00Z     |
+      | file_name | s3_landing_path                              | s3_archive_path                              |
+      | file1.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://agilisium-playground-dev/filestore/purgo/patient_raw_archive |
+      | file2.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://agilisium-playground-dev/filestore/purgo/patient_raw_archive |
 
-  Scenario Outline: Error when required fields are missing in log table
-    Given the script reads a row from "purgo_playground.s3_file_process_log" with missing required fields
-    And the following file metadata is present:
-      | file_name      | s3_landing_path      | s3_archive_path      | file_status | file_processed_date |
-      | <file_name>    | <s3_landing_path>    | <s3_archive_path>    | <file_status> | <file_processed_date> |
-    When the script attempts to process the file
-    Then an error is raised: "<error_message>"
-    And the file is not migrated
-
-    Examples:
-      | file_name         | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date      | error_message                                 |
-      | patient_004.csv   | NULL                                      | s3://bucket/filestore/purgo/patient_archive | SUCCESS     | 2024-06-09T18:00:00Z     | Missing s3_landing_path for file patient_004.csv |
-      | lab_202408.csv    | s3://bucket/filestore/purgo/lab_raw       | NULL                                        | SUCCESS     | 2024-06-10T19:00:00Z     | Missing s3_archive_path for file lab_202408.csv  |
-      | visit_125.json    | s3://bucket/filestore/purgo/visit_raw     | s3://bucket/filestore/purgo/visit_archive   | NULL        | 2024-06-11T20:00:00Z     | Missing file_status for file visit_125.json      |
-
-  Scenario Outline: Error when S3 path is invalid or inaccessible
-    Given the script reads a row from "purgo_playground.s3_file_process_log" with valid metadata
-    And the following file metadata is present:
-      | file_name      | s3_landing_path      | s3_archive_path      | file_status | file_processed_date |
-      | <file_name>    | <s3_landing_path>    | <s3_archive_path>    | <file_status> | <file_processed_date> |
-    When the script attempts to move the file and the S3 path is invalid or inaccessible
-    Then an error is raised: "<error_message>"
-    And the file is not migrated
+  Scenario Outline: Invalid s3_archive_path
+    Given the s3_file_process_log table has the following records:
+      | file_name | s3_landing_path                              | s3_archive_path                              | file_status |
+      | <file_name> | <s3_landing_path> | <s3_archive_path> | SUCCESS    |
+    And the s3_archive_path is invalid
+    When the PySpark script is executed
+    Then the file is not moved
+    And the wrk_s3_file_migration_audit table has a new record with:
+      | file_name | action | source_path | target_path | status | reason | timestamp |
+      | <file_name> | MOVE   | <s3_landing_path> | <s3_archive_path> | FAILED | Invalid archive path | <current_timestamp> |
 
     Examples:
-      | file_name         | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date      | error_message                                 |
-      | patient_005.csv   | s3://invalid-bucket/purgo/patient_raw    | s3://bucket/filestore/purgo/patient_archive | SUCCESS     | 2024-06-12T21:00:00Z     | S3 path not found: s3://invalid-bucket/purgo/patient_raw |
-      | lab_202409.csv    | s3://bucket/filestore/purgo/lab_raw      | s3://invalid-bucket/purgo/lab_archive       | SUCCESS     | 2024-06-13T22:00:00Z     | S3 path not found: s3://invalid-bucket/purgo/lab_archive |
+      | file_name | s3_landing_path                              | s3_archive_path                              |
+      | file1.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://invalid-archive-path |
+      | file2.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://invalid-archive-path |
 
-  Scenario Outline: Error when AWS credentials are missing or invalid
-    Given the script attempts to retrieve "access_key" and "secret_key" from Databricks secret scope "aws_keys"
-    When the secret is missing or invalid
-    Then an error is raised: "<error_message>"
-    And no files are migrated
-
-    Examples:
-      | error_message                                         |
-      | Databricks secret 'aws_keys/access_key' not found     |
-      | Databricks secret 'aws_keys/secret_key' not found     |
-      | Invalid AWS credentials provided                      |
-
-  Scenario Outline: Error when file type is unsupported (optional validation)
-    Given the script reads a row from "purgo_playground.s3_file_process_log" with unsupported file type
-    And the following file metadata is present:
-      | file_name      | s3_landing_path      | s3_archive_path      | file_status | file_processed_date |
-      | <file_name>    | <s3_landing_path>    | <s3_archive_path>    | <file_status> | <file_processed_date> |
-    When the script attempts to move the file
-    Then an error is raised: "<error_message>"
-    And the file is not migrated
+  Scenario Outline: File status is not SUCCESS
+    Given the s3_file_process_log table has the following records:
+      | file_name | s3_landing_path                              | s3_archive_path                              | file_status |
+      | <file_name> | <s3_landing_path> | <s3_archive_path> | <file_status> |
+    When the PySpark script is executed
+    Then the file is not moved
+    And the wrk_s3_file_migration_audit table does not have a new record
 
     Examples:
-      | file_name         | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date      | error_message                                 |
-      | patient_006.exe   | s3://bucket/filestore/purgo/patient_raw  | s3://bucket/filestore/purgo/patient_archive | SUCCESS     | 2024-06-14T23:00:00Z     | Unsupported file type: .exe                    |
-
-  Scenario Outline: Duplicate file_name in log table with different paths
-    Given the script reads multiple rows from "purgo_playground.s3_file_process_log" with duplicate file_name but different paths
-    And the following file metadata is present:
-      | file_name      | s3_landing_path      | s3_archive_path      | file_status | file_processed_date |
-      | <file_name>    | <s3_landing_path>    | <s3_archive_path>    | <file_status> | <file_processed_date> |
-    When the script processes each row independently
-    Then each file is migrated from its respective s3_landing_path to s3_archive_path
-
-    Examples:
-      | file_name         | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date      |
-      | patient_007.csv   | s3://bucket/filestore/purgo/patient_raw  | s3://bucket/filestore/purgo/patient_archive | SUCCESS     | 2024-06-15T08:00:00Z     |
-      | patient_007.csv   | s3://bucket/filestore/purgo/patient_raw2 | s3://bucket/filestore/purgo/patient_archive2 | SUCCESS     | 2024-06-15T09:00:00Z     |
-
-  Scenario: No eligible files to migrate
-    Given the script reads all rows from "purgo_playground.s3_file_process_log"
-    And no rows have file_status = 'SUCCESS'
-    When the script filters for eligible files
-    Then no files are migrated
-    And the script completes without error
-
-  Scenario: File already exists in archive folder
-    Given the script reads a row from "purgo_playground.s3_file_process_log" with file_status = 'SUCCESS'
-    And the file "<file_name>" already exists in "<s3_archive_path>"
-    When the script attempts to move the file
-    Then the file is not duplicated in "<s3_archive_path>"
-    And the file is removed from "<s3_landing_path>"
-    And no error is raised
-
-    Examples:
-      | file_name         | s3_landing_path                          | s3_archive_path                          | file_status | file_processed_date      |
-      | patient_008.csv   | s3://bucket/filestore/purgo/patient_raw  | s3://bucket/filestore/purgo/patient_archive | SUCCESS     | 2024-06-16T10:00:00Z     |
-
-  Scenario: File processed_date is not used for migration eligibility
-    Given the script reads a row from "purgo_playground.s3_file_process_log" with file_status = 'SUCCESS' and any file_processed_date
-    When the script processes the file
-    Then the file is migrated regardless of file_processed_date
-
-  Scenario: Migration does not update log table
-    Given the script migrates files from s3_landing_path to s3_archive_path
-    When the migration completes
-    Then no updates are made to "purgo_playground.s3_file_process_log" table
-
-# END
+      | file_name | s3_landing_path                              | s3_archive_path                              | file_status |
+      | file1.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://agilisium-playground-dev/filestore/purgo/patient_raw_archive | FAILED    |
+      | file2.txt | s3://agilisium-playground-dev/filestore/purgo/patient_raw | s3://agilisium-playground-dev/filestore/purgo/patient_raw_archive | PENDING   |
