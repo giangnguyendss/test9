@@ -1,0 +1,142 @@
+Feature: Clone and transform Outbound FIA tables with DELETE_FLAG field and NOT NULL constraint
+
+  Background:
+    Given the Unity Catalog is "purgo_databricks" and schema is "purgo_playground"
+    And the source tables are:
+      | Table Name         |
+      | ods_free_drug      |
+      | ods_non_contracting|
+      | ods_copay          |
+    And the clone tables are:
+      | Table Name                |
+      | ods_free_drug_clone       |
+      | ods_non_contracting_clone |
+      | ods_copay_clone           |
+
+  Scenario Outline: Drop clone table if exists before recreation
+    Given the clone table "<clone_table>" exists in the catalog
+    When the table is dropped
+    Then the table "<clone_table>" should not exist in the catalog
+
+    Examples:
+      | clone_table                |
+      | ods_free_drug_clone        |
+      | ods_non_contracting_clone  |
+      | ods_copay_clone            |
+
+  Scenario Outline: Create clone table with DELETE_FLAG field as NOT NULL
+    When the clone table "<clone_table>" is created from source table "<source_table>"
+    Then the schema of "<clone_table>" should match "<source_table>" except:
+      | Source Field | Clone Field   | Data Type | Constraint |
+      | Filler_1     | DELETE_FLAG   | string    | NOT NULL   |
+    And all other fields should retain their names, types, and nullability
+
+    Examples:
+      | source_table         | clone_table                |
+      | ods_free_drug        | ods_free_drug_clone        |
+      | ods_non_contracting  | ods_non_contracting_clone  |
+      | ods_copay            | ods_copay_clone            |
+
+  Scenario Outline: Load data into clone table, filtering out NULL Filler_1
+    Given the source table "<source_table>" contains rows with Filler_1 values
+    When data is loaded into "<clone_table>"
+    Then only rows where Filler_1 IS NOT NULL are included
+    And the Filler_1 field is renamed to DELETE_FLAG in the clone table
+    And all other fields are copied as-is
+
+    Examples:
+      | source_table         | clone_table                |
+      | ods_free_drug        | ods_free_drug_clone        |
+      | ods_non_contracting  | ods_non_contracting_clone  |
+      | ods_copay            | ods_copay_clone            |
+
+  Scenario Outline: Validate NOT NULL constraint on DELETE_FLAG in clone table
+    Given the clone table "<clone_table>" is created
+    When a row with DELETE_FLAG=NULL is inserted
+    Then an error is raised with message "NOT NULL constraint violated for DELETE_FLAG"
+
+    Examples:
+      | clone_table                |
+      | ods_free_drug_clone        |
+      | ods_non_contracting_clone  |
+      | ods_copay_clone            |
+
+  Scenario Outline: Validate schema transformation for each clone table
+    Given the source table "<source_table>" has schema:
+      | Field Name   | Data Type | Nullable |
+      | <field_1>    | <type_1>  | <null_1> |
+      | Filler_1     | string    | true     |
+      | <field_2>    | <type_2>  | <null_2> |
+    When the clone table "<clone_table>" is created
+    Then the clone table schema should be:
+      | Field Name   | Data Type | Nullable |
+      | <field_1>    | <type_1>  | <null_1> |
+      | DELETE_FLAG  | string    | false    |
+      | <field_2>    | <type_2>  | <null_2> |
+
+    Examples:
+      | source_table         | clone_table                | field_1        | type_1 | null_1 | field_2        | type_2 | null_2 |
+      | ods_free_drug        | ods_free_drug_clone        | PM_ID          | string | true   | Drug_Name      | string | true   |
+      | ods_non_contracting  | ods_non_contracting_clone  | PM_ID          | string | true   | Facility       | string | true   |
+      | ods_copay            | ods_copay_clone            | PM_ID          | string | true   | NDC            | string | true   |
+
+  Scenario Outline: Validate data filtering logic for NULL and NOT NULL Filler_1
+    Given the source table "<source_table>" contains rows:
+      | PM_ID | Filler_1   | Other_Fields |
+      | 1001  | "A"        | ...          |
+      | 1002  | NULL       | ...          |
+      | 1003  | "B"        | ...          |
+    When data is loaded into "<clone_table>"
+    Then the clone table contains:
+      | PM_ID | DELETE_FLAG | Other_Fields |
+      | 1001  | "A"         | ...          |
+      | 1003  | "B"         | ...          |
+    And row with PM_ID=1002 is excluded
+
+    Examples:
+      | source_table         | clone_table                |
+      | ods_free_drug        | ods_free_drug_clone        |
+      | ods_non_contracting  | ods_non_contracting_clone  |
+      | ods_copay            | ods_copay_clone            |
+
+  Scenario Outline: Error on type mismatch for DELETE_FLAG during data load
+    Given the source table "<source_table>" contains a row with Filler_1 of type <invalid_type>
+    When data is loaded into "<clone_table>"
+    Then an error is raised with message "Type mismatch for DELETE_FLAG: expected string, got <invalid_type>"
+
+    Examples:
+      | source_table         | clone_table                | invalid_type |
+      | ods_free_drug        | ods_free_drug_clone        | integer      |
+      | ods_non_contracting  | ods_non_contracting_clone  | boolean      |
+      | ods_copay            | ods_copay_clone            | array        |
+
+  Scenario Outline: Error on duplicate PM_ID during data load (if PM_ID is unique key)
+    Given the source table "<source_table>" contains duplicate PM_ID values with Filler_1 NOT NULL
+    When data is loaded into "<clone_table>"
+    Then an error is raised with message "Duplicate PM_ID detected in source data"
+
+    Examples:
+      | source_table         | clone_table                |
+      | ods_free_drug        | ods_free_drug_clone        |
+      | ods_non_contracting  | ods_non_contracting_clone  |
+      | ods_copay            | ods_copay_clone            |
+
+  Scenario: Validate that only specified tables are transformed
+    Given other tables exist in the schema (e.g., d_product_clone, patient_case_clone)
+    When the transformation logic is executed
+    Then only ods_free_drug_clone, ods_non_contracting_clone, and ods_copay_clone are affected
+    And other tables remain unchanged
+
+  Scenario Outline: Validate successful clone table creation and data load (happy path)
+    Given the source table "<source_table>" contains valid rows with Filler_1 NOT NULL
+    When the clone table "<clone_table>" is created and loaded
+    Then the clone table contains all expected rows with DELETE_FLAG populated
+    And the schema matches the requirements
+
+    Examples:
+      | source_table         | clone_table                |
+      | ods_free_drug        | ods_free_drug_clone        |
+      | ods_non_contracting  | ods_non_contracting_clone  |
+      | ods_copay            | ods_copay_clone            |
+
+# END
