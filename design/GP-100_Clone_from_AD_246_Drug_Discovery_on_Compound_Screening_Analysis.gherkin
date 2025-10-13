@@ -1,0 +1,149 @@
+Feature: Compound Drug Analysis Aggregation and Categorization
+
+  Background:
+    Given the source table "purgo_playground.compound_drug_analysis" in Unity Catalog "purgo_databricks"
+    And the table contains columns: study_id, compound_id, mutation_id, therapeutic_area, drug_name, ic50, auc, efficacy, toxicity, potency, sample_size, mutation_frequency, mutation_severity, compound_concentration, cell_viability, growth_inhibition, result, approved_flag, validation_status, status, created_by, score1, score2, score3, score4, score5
+
+  Scenario: Filter and aggregate compound drug analysis data by therapeutic area
+    Given the table contains valid data for all required columns
+    When the dataset is filtered to include only rows where approved_flag = 1 and validation_status = 'valid'
+    And the filtered data is grouped by therapeutic_area to calculate:
+      | metric             | calculation                        |
+      | avg_ic50           | average(ic50)                      |
+      | avg_auc            | average(auc)                       |
+      | avg_efficacy       | average(efficacy)                  |
+      | total_sample_size  | sum(sample_size)                   |
+      | study_count        | countDistinct(study_id)            |
+    Then the aggregated metrics are joined to each filtered row on therapeutic_area
+    And for each row, overall_score is computed as average(score1, score2, score3, score4, score5)
+    And each row is categorized into potential_category:
+      | condition                          | category           |
+      | overall_score >= 70 and <= 100     | High Potential     |
+      | overall_score >= 60 and < 70       | Moderate Potential |
+      | overall_score < 60                 | Low Potential      |
+    And the final output includes all original columns, aggregated metrics, overall_score, and potential_category
+
+  Scenario Outline: Categorization of compound results by overall_score
+    Given a filtered row with score1=<score1>, score2=<score2>, score3=<score3>, score4=<score4>, score5=<score5>
+    When overall_score is calculated as average of the five scores
+    Then the row is categorized as <potential_category>
+
+    Examples:
+      | score1 | score2 | score3 | score4 | score5 | overall_score | potential_category   |
+      | 80     | 85     | 90     | 75     | 80     | 82            | High Potential      |
+      | 65     | 62     | 68     | 66     | 64     | 65            | Moderate Potential  |
+      | 55     | 58     | 59     | 57     | 56     | 57            | Low Potential       |
+      | 100    | 100    | 100    | 100    | 100    | 100           | High Potential      |
+      | 70     | 70     | 70     | 70     | 70     | 70            | High Potential      |
+      | 69     | 69     | 69     | 69     | 69     | 69            | Moderate Potential  |
+      | 60     | 60     | 60     | 60     | 60     | 60            | Moderate Potential  |
+      | 59     | 59     | 59     | 59     | 59     | 59            | Low Potential       |
+      | 0      | 0      | 0      | 0      | 0      | 0             | Low Potential       |
+      | 75     | 80     | 85     | 90     | 95     | 85            | High Potential      |
+
+  Scenario Outline: Aggregation metrics per therapeutic_area
+    Given filtered rows for therapeutic_area <therapeutic_area>
+    When aggregation is performed
+    Then the following metrics are calculated:
+      | avg_ic50         | <avg_ic50>         |
+      | avg_auc          | <avg_auc>          |
+      | avg_efficacy     | <avg_efficacy>     |
+      | total_sample_size| <total_sample_size>|
+      | study_count      | <study_count>      |
+
+    Examples:
+      | therapeutic_area | avg_ic50 | avg_auc | avg_efficacy | total_sample_size | study_count |
+      | Oncology        | 0.5      | 0.8     | 0.7          | 1000              | 5           |
+      | Cardiology      | 1.2      | 1.0     | 0.9          | 800               | 3           |
+      | Neurology       | 0.7      | 0.6     | 0.5          | 1200              | 7           |
+      | Immunology      | 0.9      | 0.7     | 0.8          | 950               | 4           |
+      | Endocrinology   | 1.1      | 1.2     | 1.0          | 1100              | 6           |
+
+  Scenario Outline: Filtering rows by approved_flag and validation_status
+    Given a row with approved_flag=<approved_flag> and validation_status=<validation_status>
+    When filtering is applied
+    Then the row is <included_or_excluded> in the analysis
+
+    Examples:
+      | approved_flag | validation_status | included_or_excluded |
+      | 1             | valid             | included            |
+      | 0             | valid             | excluded            |
+      | 1             | invalid           | excluded            |
+      | 0             | invalid           | excluded            |
+      | 1             | VALID             | excluded            |
+      | 1             | Valid             | excluded            |
+      | 1             | valid             | included            |
+      | null          | valid             | excluded            |
+      | 1             | null              | excluded            |
+      | null          | null              | excluded            |
+
+  Scenario Outline: Join filtered data with aggregated metrics
+    Given a filtered row with therapeutic_area=<therapeutic_area>
+    And aggregated metrics exist for <therapeutic_area>
+    When the join is performed
+    Then the row contains the following additional columns:
+      | avg_ic50         | <avg_ic50>         |
+      | avg_auc          | <avg_auc>          |
+      | avg_efficacy     | <avg_efficacy>     |
+      | total_sample_size| <total_sample_size>|
+      | study_count      | <study_count>      |
+
+    Examples:
+      | therapeutic_area | avg_ic50 | avg_auc | avg_efficacy | total_sample_size | study_count |
+      | Oncology        | 0.5      | 0.8     | 0.7          | 1000              | 5           |
+      | Cardiology      | 1.2      | 1.0     | 0.9          | 800               | 3           |
+
+  Scenario Outline: Error handling for missing or invalid score values
+    Given a filtered row with score1=<score1>, score2=<score2>, score3=<score3>, score4=<score4>, score5=<score5>
+    When overall_score is computed
+    Then if any score is missing or not a number, overall_score is null and potential_category is "Unknown"
+    And an error message "Missing or invalid score value(s) for study_id <study_id>" is logged
+
+    Examples:
+      | score1 | score2 | score3 | score4 | score5 | study_id | overall_score | potential_category |
+      | 80     | 85     | null   | 75     | 80     | S001     | null          | Unknown           |
+      | 65     | 'abc'  | 68     | 66     | 64     | S002     | null          | Unknown           |
+      | null   | null   | null   | null   | null   | S003     | null          | Unknown           |
+      | 70     | 70     | 70     | 70     | 70     | S004     | 70            | High Potential    |
+
+  Scenario Outline: Error handling for missing therapeutic_area in join
+    Given a filtered row with therapeutic_area=<therapeutic_area>
+    And no aggregated metrics exist for <therapeutic_area>
+    When the join is performed
+    Then the row contains null for aggregated metrics
+    And an error message "No aggregated metrics found for therapeutic_area <therapeutic_area>" is logged
+
+    Examples:
+      | therapeutic_area | avg_ic50 | avg_auc | avg_efficacy | total_sample_size | study_count |
+      | UnknownArea     | null     | null    | null         | null              | null        |
+      | Oncology        | 0.5      | 0.8     | 0.7          | 1000              | 5           |
+
+  Scenario Outline: Error handling for duplicate study_id in aggregation
+    Given multiple rows with the same study_id and therapeutic_area
+    When aggregation is performed
+    Then study_count is calculated as count of distinct study_id per therapeutic_area
+
+    Examples:
+      | therapeutic_area | study_ids         | study_count |
+      | Oncology        | S001,S002,S001    | 2           |
+      | Cardiology      | S003,S004,S005    | 3           |
+
+  Scenario Outline: Data type validation for approved_flag
+    Given a row with approved_flag=<approved_flag>
+    When filtering is applied
+    Then if approved_flag is not an integer, the row is excluded and error "Invalid approved_flag type for study_id <study_id>" is logged
+
+    Examples:
+      | approved_flag | study_id | included_or_excluded |
+      | 1             | S001     | included            |
+      | '1'           | S002     | excluded            |
+      | null          | S003     | excluded            |
+      | 0             | S004     | excluded            |
+
+  Scenario: Final output columns
+    Given the filtered and joined data
+    When the final output is generated
+    Then the output includes all original columns from compound_drug_analysis
+    And the following additional columns: avg_ic50, avg_auc, avg_efficacy, total_sample_size, study_count, overall_score, potential_category
+
+# END
