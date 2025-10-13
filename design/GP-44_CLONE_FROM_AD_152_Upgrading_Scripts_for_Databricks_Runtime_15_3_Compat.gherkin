@@ -1,0 +1,108 @@
+Feature: Refactor RDD-based PySpark script to DataFrame API for Databricks Runtime 15.3+
+
+  Background:
+    Given the Unity Catalog table "purgo_databricks.purgo_playground.actual_file" exists
+    And the table has a single column "value" of type string, nullable
+    And the value for rows_skip is 3
+
+  Scenario: Happy path - Skip first 3 rows using DataFrame API
+    Given the table "purgo_databricks.purgo_playground.actual_file" contains at least 4 rows
+    When the PySpark code reads the table as a DataFrame
+    And the code skips the first 3 rows using DataFrame API (not RDD)
+    Then the resulting DataFrame contains all rows except the first 3
+    And the resulting DataFrame has the same schema as the source ("value": string, nullable)
+    And no logging information is captured
+
+  Scenario Outline: Error path - Table or column issues
+    Given the table "<table_name>" does not exist or is inaccessible
+    When the PySpark code attempts to read the table
+    Then an error is raised with message "Table <table_name> not found or inaccessible"
+
+    Examples:
+      | table_name                                      |
+      | purgo_databricks.purgo_playground.actual_file   |
+      | purgo_databricks.purgo_playground.missing_table |
+
+  Scenario Outline: Error path - Missing or invalid column
+    Given the table "purgo_databricks.purgo_playground.actual_file" exists
+    And the column "<column_name>" is missing or has wrong type
+    When the PySpark code attempts to read and process the column
+    Then an error is raised with message "Column <column_name> missing or invalid type"
+
+    Examples:
+      | column_name |
+      | value       |
+      | val         |
+
+  Scenario: Error path - Table has fewer than 4 rows
+    Given the table "purgo_databricks.purgo_playground.actual_file" contains fewer than 4 rows
+    When the PySpark code skips the first 3 rows
+    Then the resulting DataFrame is empty
+
+  Scenario Outline: Error path - rows_skip is not an integer or negative
+    Given the value for rows_skip is "<rows_skip>"
+    When the PySpark code attempts to skip rows
+    Then an error is raised with message "rows_skip must be a non-negative integer"
+
+    Examples:
+      | rows_skip |
+      | -1        |
+      | abc       |
+      | null      |
+
+  Scenario: Error path - Duplicate rows in source table
+    Given the table "purgo_databricks.purgo_playground.actual_file" contains duplicate values in "value"
+    When the PySpark code skips the first 3 rows
+    Then the resulting DataFrame contains all rows except the first 3, including duplicates
+
+  Scenario: Error path - Null values in source table
+    Given the table "purgo_databricks.purgo_playground.actual_file" contains nulls in "value"
+    When the PySpark code skips the first 3 rows
+    Then the resulting DataFrame contains all rows except the first 3, including nulls
+
+  Scenario: Validation - Output DataFrame schema
+    Given the resulting DataFrame after skipping rows
+    Then the DataFrame has exactly one column "value" of type string, nullable
+
+  Scenario: Validation - No logging information captured
+    Given the PySpark code is executed
+    Then no log information is captured or output
+
+  Scenario: Example PySpark code for DBR 15.3+ (no RDD, no logging)
+    Given the requirement to skip first 3 rows from "purgo_databricks.purgo_playground.actual_file"
+    When the PySpark code is written using DataFrame API
+    Then the code is as follows:
+      """
+      from pyspark.sql import SparkSession
+      from pyspark.sql.functions import monotonically_increasing_id
+
+      spark = SparkSession.getActiveSession()
+      source_df = spark.table("purgo_databricks.purgo_playground.actual_file")
+      target_df = source_df.withColumn("row_num", monotonically_increasing_id()) \
+                           .orderBy("row_num") \
+                           .filter("row_num >= 3") \
+                           .drop("row_num")
+      # Output is target_df; no logging
+      """
+
+  Scenario Outline: Representative data cases for skipping rows
+    Given the table contains the following rows:
+      | value         |
+      | <row1>        |
+      | <row2>        |
+      | <row3>        |
+      | <row4>        |
+      | <row5>        |
+    When the PySpark code skips the first 3 rows
+    Then the resulting DataFrame contains:
+      | value         |
+      | <row4>        |
+      | <row5>        |
+
+    Examples:
+      | row1   | row2   | row3   | row4   | row5   |
+      | A      | B      | C      | D      | E      |
+      | null   | X      | Y      | Z      | W      |
+      | 1      | 2      | 3      | 4      | 5      |
+
+# END
