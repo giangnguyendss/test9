@@ -1,0 +1,116 @@
+Feature: Sales Growth Analysis by Therapeutic Area for Q1 and Q2 2023
+
+  Background:
+    Given the Unity Catalog table "purgo_databricks.purgo_playground.hcp_overall_performance" exists
+    And the table contains columns: Therapeutic_Area (string), Sales_Amount (bigint), Sales_Date (date)
+    And only data from year 2023, quarters Q1 and Q2, is relevant for analysis
+
+  Scenario: Calculate and compare sales growth for each therapeutic area between Q1 and Q2 of 2023
+    Given the table contains valid sales data for 2023 Q1 and Q2
+    When I extract Year and Quarter from Sales_Date
+    And I aggregate total Sales_Amount per Therapeutic_Area per Quarter
+    And I pivot the data to create columns Q1_Sales and Q2_Sales for each Therapeutic_Area
+    And I calculate Growth_Percentage as ((Q2_Sales - Q1_Sales) / Q1_Sales) * 100
+    Then the output should contain columns: Therapeutic_Area, Year, Q1_Sales, Q2_Sales, Growth_Percentage
+    And the results should be sorted by Growth_Percentage in descending order
+
+  Scenario Outline: Validation of required fields and types for sales growth analysis
+    Given the table contains <Therapeutic_Area>, <Sales_Amount>, <Sales_Date>
+    When I validate the data types
+    Then <Therapeutic_Area> must be string
+    And <Sales_Amount> must be bigint and not null
+    And <Sales_Date> must be date and not null
+    And if any required field is missing or type mismatched, an error "<Error_Message>" is raised
+
+    Examples:
+      | Therapeutic_Area | Sales_Amount | Sales_Date   | Error_Message                                 |
+      | Cardiology       | 10000        | 2023-01-15   |                                               |
+      | Oncology         | null         | 2023-02-10   | Sales_Amount must not be null                  |
+      | Neurology        | 5000         | null         | Sales_Date must not be null                    |
+      | Diabetes         | "abc"        | 2023-03-05   | Sales_Amount must be bigint                    |
+      |                  | 8000         | 2023-04-20   | Therapeutic_Area must not be null or empty     |
+      | Immunology       | 12000        | 2022-12-31   | Sales_Date must be in 2023 Q1 or Q2            |
+
+  Scenario Outline: Handling missing sales data for Q1 or Q2
+    Given a Therapeutic_Area has sales only in <Quarter>
+    When I pivot the data for Q1_Sales and Q2_Sales
+    Then the missing quarter sales value should be set to 0
+    And Growth_Percentage should be calculated as per formula, with division by zero handled gracefully
+
+    Examples:
+      | Therapeutic_Area | Quarter | Q1_Sales | Q2_Sales | Growth_Percentage |
+      | Cardiology       | Q1      | 15000    | 0        | -100.0            |
+      | Oncology         | Q2      | 0        | 20000    | null              |
+      | Neurology        | Both    | 8000     | 12000    | 50.0              |
+
+  Scenario: Duplicate records for the same Therapeutic_Area and Quarter
+    Given there are duplicate rows for a Therapeutic_Area in the same quarter
+    When I aggregate total Sales_Amount per Therapeutic_Area per Quarter
+    Then the sales amounts should be summed for that quarter
+
+  Scenario Outline: Type mismatch in input data
+    Given the table contains a type mismatch in <Column>
+    When I run the analysis
+    Then an error "<Error_Message>" is raised
+
+    Examples:
+      | Column           | Error_Message                       |
+      | Sales_Amount     | Sales_Amount must be bigint         |
+      | Sales_Date       | Sales_Date must be date             |
+      | Therapeutic_Area | Therapeutic_Area must be string     |
+
+  Scenario: PySpark code for sales growth analysis
+    Given the requirements for extracting, aggregating, pivoting, and calculating growth are defined
+    When I implement the analysis in PySpark
+    Then the code should read from "purgo_databricks.purgo_playground.hcp_overall_performance"
+    And the code should not contain syntax errors
+    And the output DataFrame should have columns: Therapeutic_Area, Year, Q1_Sales, Q2_Sales, Growth_Percentage
+    And the results should be sorted by Growth_Percentage descending
+
+    # Representative PySpark code (not full source data):
+    """
+    from pyspark.sql import functions as F
+
+    df = spark.table("purgo_databricks.purgo_playground.hcp_overall_performance")
+    df_2023 = df.withColumn("Year", F.year("Sales_Date")) \
+                .withColumn("Quarter", F.quarter("Sales_Date")) \
+                .filter((F.col("Year") == 2023) & (F.col("Quarter").isin([1,2])))
+
+    agg_df = df_2023.groupBy("Therapeutic_Area", "Year", "Quarter") \
+                    .agg(F.sum("Sales_Amount").alias("Total_Sales"))
+
+    pivot_df = agg_df.groupBy("Therapeutic_Area", "Year") \
+                     .pivot("Quarter", [1,2]) \
+                     .agg(F.first("Total_Sales"))
+
+    result_df = pivot_df.withColumn("Q1_Sales", F.coalesce(F.col("1"), F.lit(0))) \
+                        .withColumn("Q2_Sales", F.coalesce(F.col("2"), F.lit(0))) \
+                        .withColumn("Growth_Percentage",
+                            F.when(F.col("Q1_Sales") != 0,
+                                   ((F.col("Q2_Sales") - F.col("Q1_Sales")) / F.col("Q1_Sales") * 100)
+                            ).otherwise(None)
+                        ) \
+                        .select("Therapeutic_Area", "Year", "Q1_Sales", "Q2_Sales", "Growth_Percentage") \
+                        .orderBy(F.col("Growth_Percentage").desc())
+    """
+
+  Scenario: Output validation
+    Given the final output DataFrame
+    When I inspect the columns
+    Then the columns must be: Therapeutic_Area, Year, Q1_Sales, Q2_Sales, Growth_Percentage
+    And all values must be of correct type: string, int, int, int, double
+
+  Scenario Outline: Representative output cases
+    Given the analysis is run successfully
+    When I view the top results
+    Then the output should be as follows
+
+    Examples:
+      | Therapeutic_Area | Year | Q1_Sales | Q2_Sales | Growth_Percentage |
+      | Cardiology       | 2023 | 15000    | 30000    | 100.0             |
+      | Oncology         | 2023 | 20000    | 35000    | 75.0              |
+      | Neurology        | 2023 | 8000     | 12000    | 50.0              |
+      | Diabetes         | 2023 | 10000    | 9000     | -10.0             |
+      | Immunology       | 2023 | 0        | 20000    | null              |
+
+# END
