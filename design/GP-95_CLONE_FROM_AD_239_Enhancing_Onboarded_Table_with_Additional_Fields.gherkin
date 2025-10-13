@@ -1,0 +1,94 @@
+Feature: Patient Data Table - Addition and Validation of New Fields
+
+  Background:
+    Given the table "purgo_databricks.purgo_playground.patient_data" exists
+    And the following fields are present in the schema:
+      | Field           | Type      | Nullable |
+      | patient_id      | bigint    | Yes      |
+      | patient_name    | string    | Yes      |
+      | age             | bigint    | Yes      |
+      | diagnosis       | string    | Yes      |
+      | treatment       | string    | Yes      |
+      | ingestion_date  | timestamp | Yes      |
+      | source_system   | string    | Yes      |
+      | record_status   | string    | Yes      |
+      | created_by      | string    | Yes      |
+      | modified_by     | string    | Yes      |
+
+  Scenario Outline: Validate new fields on patient_data ingestion
+    Given a new patient record is ingested via the file upload UI
+    When the following fields are provided:
+      | patient_id      | patient_name | age | diagnosis | treatment | ingestion_date | source_system | record_status | created_by | modified_by |
+      | <patient_id>    | <patient_name> | <age> | <diagnosis> | <treatment> | <ingestion_date> | <source_system> | <record_status> | <created_by> | <modified_by> |
+    Then the record is inserted into "purgo_databricks.purgo_playground.patient_data"
+    And the following validation rules are applied:
+      | Field           | Rule                                                                                 |
+      | ingestion_date  | Must be a valid timestamp or NULL                                                   |
+      | source_system   | Must be a non-empty string or NULL                                                  |
+      | record_status   | Must be one of ["active", "inactive", "pending", NULL]                              |
+      | created_by      | Must be a non-empty string or NULL                                                  |
+      | modified_by     | Must be a non-empty string or NULL                                                  |
+    And if any validation fails, an error is returned:
+      | Field           | Error Message                                                                       |
+      | ingestion_date  | "Invalid ingestion_date: must be a timestamp or NULL"                               |
+      | source_system   | "Invalid source_system: must be a non-empty string or NULL"                         |
+      | record_status   | "Invalid record_status: must be one of [active, inactive, pending, NULL]"           |
+      | created_by      | "Invalid created_by: must be a non-empty string or NULL"                            |
+      | modified_by     | "Invalid modified_by: must be a non-empty string or NULL"                           |
+    And the output displays the updated patient_data table
+
+    Examples:
+      | patient_id | patient_name | age | diagnosis | treatment | ingestion_date      | source_system | record_status | created_by | modified_by |
+      | 1001       | John Smith   | 45  | Diabetes  | Insulin   | 2024-06-01T10:00:00 | EMR           | active        | admin      | admin       |
+      | 1002       | Jane Doe     | 30  | Asthma    | Inhaler   | 2024-06-02T11:00:00 | Portal        | pending       | nurse      | nurse       |
+      | 1003       | Bob Lee      | 60  | Cancer    | Chemo     | NULL                | EMR           | inactive      | doctor     | doctor      |
+      | 1004       | Alice Kim    | 50  | Hypertension | Beta Blocker | 2024-06-03T09:30:00 | NULL      | active        | admin      | nurse       |
+      | 1005       | NULL         | NULL| NULL      | NULL      | NULL                | NULL          | NULL          | NULL       | NULL        |
+
+  Scenario Outline: Error on invalid field types or values
+    Given a new patient record is ingested
+    When the following fields are provided:
+      | patient_id | patient_name | age | diagnosis | treatment | ingestion_date | source_system | record_status | created_by | modified_by |
+      | <patient_id> | <patient_name> | <age> | <diagnosis> | <treatment> | <ingestion_date> | <source_system> | <record_status> | <created_by> | <modified_by> |
+    Then the system validates the field types and allowed values
+    And the following error is returned:
+      | Field           | Error Message                                                                       |
+      | <error_field>   | <error_message>                                                                     |
+
+    Examples:
+      | patient_id | patient_name | age | diagnosis | treatment | ingestion_date      | source_system | record_status | created_by | modified_by | error_field     | error_message                                         |
+      | 1006       | Tom White    | 40  | Flu       | Tamiflu   | not_a_timestamp     | EMR           | active        | admin      | admin       | ingestion_date  | Invalid ingestion_date: must be a timestamp or NULL   |
+      | 1007       | Sara Black   | 35  | Migraine  | Ibuprofen | 2024-06-04T08:00:00 |               | active        | admin      | admin       | source_system   | Invalid source_system: must be a non-empty string or NULL |
+      | 1008       | Mike Green   | 55  | COPD      | Oxygen    | 2024-06-05T07:00:00 | EMR           | unknown       | admin      | admin       | record_status   | Invalid record_status: must be one of [active, inactive, pending, NULL] |
+      | 1009       | Emma Blue    | 28  | Allergy   | Antihist  | 2024-06-06T06:00:00 | EMR           | active        |           | admin       | created_by      | Invalid created_by: must be a non-empty string or NULL |
+      | 1010       | Alex Brown   | 38  | Arthritis | NSAIDs    | 2024-06-07T05:00:00 | EMR           | active        | admin      |             | modified_by     | Invalid modified_by: must be a non-empty string or NULL |
+
+  Scenario: Backfill new fields for existing records
+    Given existing records in "purgo_databricks.purgo_playground.patient_data" have NULL values for new fields
+    When a backfill operation is triggered
+    Then the following logic is applied:
+      | Field           | Backfill Logic                                                        |
+      | ingestion_date  | Set to earliest available timestamp from patient_hist or NULL         |
+      | source_system   | Set to "Unknown" if not available                                    |
+      | record_status   | Set to "active" if patient has recent activity, else "inactive"      |
+      | created_by      | Set to "system"                                                      |
+      | modified_by     | Set to "system"                                                      |
+    And the output displays the updated patient_data table
+
+  Scenario Outline: Duplicate patient_id validation
+    Given a new patient record is ingested
+    When the patient_id <patient_id> already exists in "purgo_databricks.purgo_playground.patient_data"
+    Then the system returns an error "Duplicate patient_id: <patient_id> already exists"
+
+    Examples:
+      | patient_id |
+      | 1001       |
+      | 1002       |
+
+  Scenario: Display updated patient_data table
+    Given the ingestion and validation steps are complete
+    When the output is requested
+    Then display the patient_data table with the following columns:
+      | patient_id | patient_name | age | diagnosis | treatment | ingestion_date | source_system | record_status | created_by | modified_by |
+
+# END
