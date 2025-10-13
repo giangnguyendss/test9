@@ -1,0 +1,152 @@
+Feature: Enrich patient_therapy_shipment with derived metrics for adherence, therapy gaps, age, and discontinuation
+
+  Background:
+    Given the source table "purgo_playground.patient_therapy_shipment" exists in Unity Catalog
+    And the table contains the following columns:
+      | product | ship_date | days_supply | qty | treatment_id | dob | first_ship_date | refill_status | patient_id | ship_type | shipment_arrived_status | delivery_ontime | calctime |
+    And the output table "enriched_patient_therapy_shipment" is defined with all source columns plus 12 derived columns
+    And the calculation logic for derived columns is as specified in logic.xlsx
+
+  Scenario Outline: Successful enrichment of patient_therapy_shipment with derived metrics
+    Given a row in patient_therapy_shipment with valid values for all required columns
+    When the enrichment process runs
+    Then the output row contains all source columns, with qty converted to string
+    And the following derived columns are calculated:
+      | shipment_expiry         | DATE_ADD(ship_date, cast(COALESCE(days_supply, qty / 3*7 ) as int)) |
+      | discontinuation_date    | DATE_ADD(shipment_expiry, 91)                                       |
+      | days_until_next_ship    | DATEDIFF(shipment_expiry, calctime) + 1                             |
+      | days_since_last_fill    | DATEDIFF(calctime, ship_date) + 1                                   |
+      | expected_refill_date    | DATE_ADD(calctime, days_until_next_ship)                            |
+      | prior_ship              | LAG(ship_date) OVER(PARTITION BY treatment_id ORDER BY ship_date)   |
+      | days_between            | DATEDIFF(ship_date, prior_ship)                                     |
+      | days_since_supply_out   | CASE WHEN DATEDIFF(calctime, shipment_expiry) >= 0 THEN DATEDIFF(calctime, shipment_expiry) ELSE NULL |
+      | age                     | FLOOR(DATEDIFF(DAY, dob, calctime) / 365.25)                        |
+      | age_at_first_ship       | ROUND(DATEDIFF(DAY, dob, first_ship_date) / 365.0, 0)               |
+      | latest_therapy_ships    | COUNT(ship_date) OVER(PARTITION BY patient_id, treatment_id WHERE ship_type='commercial') |
+      | discontinuation_type    | CASE WHEN refill_status = 'DC - Standard' THEN 'STANDARD' WHEN refill_status = 'DC-PERMANENT' THEN 'PERMANENT' ELSE NULL |
+    And the output row is displayed in enriched_patient_therapy_shipment
+
+    Examples:
+      | product | ship_date   | days_supply | qty | treatment_id | dob        | first_ship_date | refill_status     | patient_id | ship_type   | shipment_arrived_status | delivery_ontime | calctime            |
+      | DrugA   | 2024-01-01  | 28          | 84  | TREAT001     | 1980-05-10 | 2024-01-01      | DC - Standard     | PAT001     | commercial  | arrived                | yes             | 2024-01-29 00:00:00 |
+      | DrugB   | 2024-02-15  | NULL        | 63  | TREAT002     | 1975-12-20 | 2024-02-15      | DC-PERMANENT      | PAT002     | commercial  | arrived                | no              | 2024-03-20 00:00:00 |
+      | DrugC   | 2024-03-10  | 30          | 90  | TREAT003     | 1990-07-01 | 2024-03-10      | ACTIVE            | PAT003     | commercial  | pending                | yes             | 2024-04-10 00:00:00 |
+      | DrugD   | 2024-04-05  | NULL        | 21  | TREAT004     | 2000-01-01 | 2024-04-05      | DC - Standard     | PAT004     | noncommercial| arrived               | yes             | 2024-05-01 00:00:00 |
+      | DrugE   | 2024-05-20  | 14          | 42  | TREAT005     | 1965-03-15 | 2024-05-20      | DC-PERMANENT      | PAT005     | commercial  | arrived                | yes             | 2024-06-10 00:00:00 |
+
+  Scenario Outline: Validation error for missing required fields
+    Given a row in patient_therapy_shipment with missing <missing_column>
+    When the enrichment process runs
+    Then an error is raised: "Missing required field: <missing_column>"
+    And the row is not processed
+
+    Examples:
+      | missing_column         |
+      | product               |
+      | ship_date             |
+      | treatment_id          |
+      | patient_id            |
+      | dob                   |
+      | first_ship_date       |
+      | qty                   |
+
+  Scenario Outline: Validation error for type mismatch
+    Given a row in patient_therapy_shipment where <column> has an invalid type
+    When the enrichment process runs
+    Then an error is raised: "Type mismatch in column: <column>"
+    And the row is not processed
+
+    Examples:
+      | column      |
+      | ship_date   |
+      | dob         |
+      | qty         |
+      | days_supply |
+
+  Scenario Outline: Handling NULL or missing days_supply and qty
+    Given a row in patient_therapy_shipment where days_supply is NULL and qty is <qty>
+    When the enrichment process runs
+    Then shipment_expiry is calculated using qty / 3*7 if qty is not NULL
+    And if both days_supply and qty are NULL, an error is raised: "Cannot calculate shipment_expiry: missing days_supply and qty"
+
+    Examples:
+      | qty  |
+      | 84   |
+      | NULL |
+
+  Scenario Outline: Handling first shipment (no prior_ship)
+    Given a row in patient_therapy_shipment that is the first shipment for a treatment_id
+    When the enrichment process runs
+    Then prior_ship is NULL
+    And days_between is NULL
+
+    Examples:
+      | treatment_id | ship_date   | prior_ship |
+      | TREAT001     | 2024-01-01  | NULL       |
+      | TREAT002     | 2024-02-15  | NULL       |
+
+  Scenario Outline: Discontinuation type mapping
+    Given a row in patient_therapy_shipment with refill_status = <refill_status>
+    When the enrichment process runs
+    Then discontinuation_type is mapped as follows:
+      | DC - Standard   | STANDARD   |
+      | DC-PERMANENT    | PERMANENT  |
+      | <other>         | NULL       |
+
+    Examples:
+      | refill_status   | expected_discontinuation_type |
+      | DC - Standard   | STANDARD                     |
+      | DC-PERMANENT    | PERMANENT                    |
+      | ACTIVE          | NULL                         |
+      | DC-OTHER        | NULL                         |
+
+  Scenario Outline: latest_therapy_ships calculation
+    Given multiple rows for the same patient_id and treatment_id with ship_type = <ship_type>
+    When the enrichment process runs
+    Then latest_therapy_ships is the count of ship_date for patient_id, treatment_id where ship_type = 'commercial'
+
+    Examples:
+      | patient_id | treatment_id | ship_type    | expected_count |
+      | PAT001     | TREAT001     | commercial   | 3              |
+      | PAT002     | TREAT002     | noncommercial| 0              |
+      | PAT003     | TREAT003     | commercial   | 1              |
+
+  Scenario Outline: qty type conversion
+    Given a row in patient_therapy_shipment with qty as bigint
+    When the enrichment process runs
+    Then qty is converted to string in the output
+
+    Examples:
+      | qty_in_source | qty_in_output |
+      | 84            | "84"          |
+      | 21            | "21"          |
+
+  Scenario Outline: Error on duplicate rows (same patient_id, treatment_id, ship_date)
+    Given two rows in patient_therapy_shipment with the same patient_id, treatment_id, and ship_date
+    When the enrichment process runs
+    Then an error is raised: "Duplicate shipment record for patient_id, treatment_id, ship_date"
+    And only one row is processed
+
+    Examples:
+      | patient_id | treatment_id | ship_date   |
+      | PAT001     | TREAT001     | 2024-01-01  |
+      | PAT002     | TREAT002     | 2024-02-15  |
+
+  Scenario Outline: Error on invalid date values
+    Given a row in patient_therapy_shipment with <column> as an invalid date
+    When the enrichment process runs
+    Then an error is raised: "Invalid date in column: <column>"
+    And the row is not processed
+
+    Examples:
+      | column         |
+      | ship_date      |
+      | dob            |
+      | first_ship_date|
+
+  Scenario: Display enriched_patient_therapy_shipment result
+    Given enrichment completes successfully for all valid rows
+    When the output is generated
+    Then the enriched_patient_therapy_shipment table is displayed with all source and derived columns
+
+# END
