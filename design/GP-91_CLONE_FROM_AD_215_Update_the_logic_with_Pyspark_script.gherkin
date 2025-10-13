@@ -1,65 +1,55 @@
-Feature: Update Sales KPI Logic and Output for LifeScience Sales Pipeline
+Feature: Product Sales Analysis Logic Updates
 
   Background:
-    Given the existing PySpark pipeline for sales KPI calculation
-    And the following requirements for logic updates:
-      | Logic Item           | Requirement                                                                 |
-      |---------------------|-----------------------------------------------------------------------------|
-      | Bonus Eligibility   | 'Yes' if sales_amount > 25000, else retain previous logic                   |
-      | Performance Flag    | High if sales_amount > 9000, Medium if >7000 and <=9000, else Low           |
-      | Product Perf Band   | Excellent if >10000, Good if >8000, Moderate if >5000, else Poor            |
-      | Rep Tier            | Platinum Plus if total_sales_amount > 45000, Platinum if >35000, Gold if >25000, Silver otherwise |
-    And the final output must display the updated DataFrames
+    Given the product sales data is loaded from Unity Catalog schema purgo_playground
+    And the following columns exist in the sales dataset: sales_amount, bonus_eligibility, performance_flag, product_perf_band
+    And rep_summary is aggregated per rep with total_rep_sales
 
-  Scenario Outline: Validate performance_flag logic for sales transactions
+  Scenario Outline: Update Bonus Eligibility per Transaction
     Given a sales transaction with sales_amount <sales_amount>
-    When the pipeline calculates performance_flag
-    Then the performance_flag should be "<expected_flag>"
+    When the bonus eligibility logic is applied
+    Then bonus_eligibility should be "<expected_bonus_eligibility>"
+
+    Examples:
+      | sales_amount | expected_bonus_eligibility |
+      | 26000        | Yes                       |
+      | 25000        | <existing_logic>          |
+      | 24999        | <existing_logic>          |
+
+  Scenario Outline: Update Performance Flag per Transaction
+    Given a sales transaction with sales_amount <sales_amount>
+    When the performance_flag logic is applied
+    Then performance_flag should be "<expected_flag>"
 
     Examples:
       | sales_amount | expected_flag |
-      | 9500         | High          |
-      | 9000         | Medium        |
-      | 8000         | Medium        |
-      | 7001         | Medium        |
-      | 7000         | Low           |
-      | 5000         | Low           |
-      | 0            | Low           |
+      | 9500         | High         |
+      | 9001         | High         |
+      | 9000         | Medium       |
+      | 8000         | Medium       |
+      | 7001         | Medium       |
+      | 7000         | Low          |
+      | 5000         | Low          |
 
-  Scenario Outline: Validate product_perf_band logic for sales transactions
+  Scenario Outline: Update Product Performance Band per Transaction
     Given a sales transaction with sales_amount <sales_amount>
-    When the pipeline calculates product_perf_band
-    Then the product_perf_band should be "<expected_band>"
+    When the product_perf_band logic is applied
+    Then product_perf_band should be "<expected_band>"
 
     Examples:
       | sales_amount | expected_band |
-      | 15000        | Excellent     |
-      | 10001        | Excellent     |
-      | 10000        | Good          |
-      | 9000         | Good          |
-      | 8001         | Good          |
-      | 8000         | Moderate      |
-      | 6000         | Moderate      |
-      | 5001         | Moderate      |
-      | 5000         | Poor          |
-      | 1000         | Poor          |
+      | 15000        | Excellent    |
+      | 10001        | Excellent    |
+      | 10000        | Good         |
+      | 9000         | Good         |
+      | 8001         | Good         |
+      | 8000         | Moderate     |
+      | 5001         | Moderate     |
+      | 5000         | <existing_or_poor> |
 
-  Scenario Outline: Validate bonus_eligibility logic for rep_summary
-    Given a rep with total_rep_sales <total_rep_sales>
-    When the pipeline calculates bonus_eligibility in rep_summary
-    Then bonus_eligibility should be "<expected_eligibility>"
-
-    Examples:
-      | total_rep_sales | expected_eligibility |
-      | 26000           | Yes                  |
-      | 25001           | Yes                  |
-      | 25000           | No                   |
-      | 24999           | No                   |
-      | 10000           | No                   |
-
-  Scenario Outline: Validate rep_tier assignment in rep_summary
-    Given a rep with total_rep_sales <total_rep_sales>
-    When the pipeline calculates rep_tier
+  Scenario Outline: Add Rep Tier to rep_summary
+    Given a rep_summary record with total_rep_sales <total_rep_sales>
+    When the rep_tier logic is applied
     Then rep_tier should be "<expected_tier>"
 
     Examples:
@@ -73,98 +63,98 @@ Feature: Update Sales KPI Logic and Output for LifeScience Sales Pipeline
       | 30000           | Gold            |
       | 25001           | Gold            |
       | 25000           | Silver          |
-      | 10000           | Silver          |
+      | 20000           | Silver          |
 
-  Scenario: Validate output DataFrame columns for kpi_df
-    Given the pipeline has run with the updated logic
-    When kpi_df is displayed
-    Then the output should include columns:
-      | transaction_id |
-      | rep_name       |
-      | product_name   |
-      | sales_amount   |
-      | sales_bucket   |
+  Scenario: Display Final Output with Updated Columns
+    Given all logic updates have been applied to the sales and rep_summary datasets
+    When the final output is displayed
+    Then the output should include the updated columns: bonus_eligibility, performance_flag, product_perf_band, rep_tier
+
+  Scenario Outline: Validation - sales_amount Type
+    Given a sales transaction with sales_amount value <sales_amount>
+    When the logic is applied
+    Then if sales_amount is not numeric, an error "sales_amount must be numeric" should be raised
+
+    Examples:
+      | sales_amount |
+      | "abc"        |
+      | null         |
+
+  Scenario Outline: Validation - total_rep_sales Type
+    Given a rep_summary record with total_rep_sales value <total_rep_sales>
+    When the rep_tier logic is applied
+    Then if total_rep_sales is not numeric, an error "total_rep_sales must be numeric" should be raised
+
+    Examples:
+      | total_rep_sales |
+      | "xyz"           |
+      | null            |
+
+  Scenario: Validation - Missing Required Columns
+    Given the sales dataset is missing the sales_amount column
+    When the logic is applied
+    Then an error "Missing required column: sales_amount" should be raised
+
+  Scenario: Validation - Duplicate rep_summary Records
+    Given rep_summary contains duplicate rep_id records
+    When the rep_tier logic is applied
+    Then an error "Duplicate rep_id found in rep_summary" should be raised
+
+  Scenario Outline: Validation - Allowed Values for rep_tier
+    Given a rep_summary record with calculated rep_tier value <rep_tier>
+    When the output is displayed
+    Then rep_tier should be one of ["Platinum Plus", "Platinum", "Gold", "Silver"]
+
+    Examples:
+      | rep_tier      |
+      | Platinum Plus |
+      | Platinum      |
+      | Gold          |
+      | Silver        |
+      | "Diamond"     |
+
+  Scenario Outline: Validation - Allowed Values for performance_flag
+    Given a sales transaction with calculated performance_flag value <performance_flag>
+    When the output is displayed
+    Then performance_flag should be one of ["High", "Medium", "Low"]
+
+    Examples:
       | performance_flag |
-      | rep_running_total |
-      | sales_growth   |
-      | rolling_avg_sales |
-      | annual_rank    |
+      | High             |
+      | Medium           |
+      | Low              |
+      | "Super"          |
+
+  Scenario Outline: Validation - Allowed Values for product_perf_band
+    Given a sales transaction with calculated product_perf_band value <product_perf_band>
+    When the output is displayed
+    Then product_perf_band should be one of ["Excellent", "Good", "Moderate", "<existing_or_poor>"]
+
+    Examples:
       | product_perf_band |
+      | Excellent         |
+      | Good              |
+      | Moderate          |
+      | Poor              |
 
-  Scenario: Validate output DataFrame columns for rep_summary
-    Given the pipeline has run with the updated logic
-    When rep_summary is displayed
-    Then the output should include columns:
-      | rep_id           |
-      | rep_name         |
-      | txn_count        |
-      | total_rep_sales  |
-      | avg_rep_sales    |
-      | max_rep_sale     |
-      | bonus_eligibility|
-      | rep_tier         |
+  Scenario: Error Path - Null sales_amount
+    Given a sales transaction with sales_amount null
+    When the logic is applied
+    Then an error "sales_amount cannot be null" should be raised
 
-  Scenario Outline: Error handling for missing or invalid sales_amount
-    Given a sales transaction with sales_amount <sales_amount>
-    When the pipeline processes the transaction
-    Then an error "<expected_error>" should be raised
+  Scenario: Error Path - Null total_rep_sales
+    Given a rep_summary record with total_rep_sales null
+    When the rep_tier logic is applied
+    Then an error "total_rep_sales cannot be null" should be raised
 
-    Examples:
-      | sales_amount | expected_error                       |
-      | NULL         | "sales_amount is required"           |
-      | "abc"        | "sales_amount must be numeric"       |
-      | -100         | "sales_amount must be >= 0"          |
+  Scenario: Error Path - Missing rep_summary
+    Given rep_summary is missing from the dataset
+    When the rep_tier logic is applied
+    Then an error "rep_summary dataset not found" should be raised
 
-  Scenario Outline: Error handling for duplicate transaction_id
-    Given two sales transactions with the same transaction_id <transaction_id>
-    When the pipeline processes the transactions
-    Then an error "Duplicate transaction_id: <transaction_id>" should be raised
-
-    Examples:
-      | transaction_id |
-      | TXN001         |
-      | TXN999         |
-
-  Scenario Outline: Error handling for missing rep_id in rep_summary
-    Given a rep_summary row with rep_id <rep_id>
-    When the pipeline processes rep_summary
-    Then an error "<expected_error>" should be raised
-
-    Examples:
-      | rep_id | expected_error           |
-      | NULL   | "rep_id is required"     |
-
-  Scenario: Validate allowed values for performance_flag
-    Given the pipeline calculates performance_flag
-    Then allowed values are "High", "Medium", "Low"
-    And any other value should raise "Invalid performance_flag value"
-
-  Scenario: Validate allowed values for product_perf_band
-    Given the pipeline calculates product_perf_band
-    Then allowed values are "Excellent", "Good", "Moderate", "Poor"
-    And any other value should raise "Invalid product_perf_band value"
-
-  Scenario: Validate allowed values for rep_tier
-    Given the pipeline calculates rep_tier
-    Then allowed values are "Platinum Plus", "Platinum", "Gold", "Silver"
-    And any other value should raise "Invalid rep_tier value"
-
-  Scenario: Validate bonus_eligibility values
-    Given the pipeline calculates bonus_eligibility
-    Then allowed values are "Yes", "No"
-    And any other value should raise "Invalid bonus_eligibility value"
-
-  Scenario: Validate type of total_rep_sales in rep_summary
-    Given rep_summary is generated
-    Then total_rep_sales must be numeric and >= 0
-
-  Scenario: Validate type of sales_amount in kpi_df
-    Given kpi_df is generated
-    Then sales_amount must be numeric and >= 0
-
-  Scenario: Validate display of final outputs
-    Given the pipeline has run successfully
-    When the final outputs are displayed
-    Then kpi_df and rep_summary should reflect all updated logic and columns
+  Scenario: Error Path - Display Output with Missing Columns
+    Given the output is displayed without the updated columns
+    When the output is validated
+    Then an error "Output missing required columns: bonus_eligibility, performance_flag, product_perf_band, rep_tier" should be raised
 
 # END
