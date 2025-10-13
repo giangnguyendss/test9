@@ -1,0 +1,127 @@
+Feature: Batch Quality Analysis and Summary for purgo_playground.batch_qc
+
+  Background:
+    Given the source table "purgo_databricks.purgo_playground.batch_qc" with columns:
+      | batch_id | product_name | production_date | quantity | quality_check_score |
+    And the pass/fail rule: quality_check_score < 97 is "fail", otherwise "pass"
+    And all outputs must be derived from this table only
+
+  Scenario: Compute batch-wise quality status
+    Given the batch data is loaded from "purgo_databricks.purgo_playground.batch_qc"
+    When a new column "quality_status" is computed for each batch:
+      | If quality_check_score < 97 then "fail" else "pass" |
+    Then the output DataFrame "batch_wise_quality_status_df" contains:
+      | batch_id | product_name | quality_check_score | quality_status |
+    And all batch_ids are unique
+    And quality_status is either "pass" or "fail"
+
+  Scenario Outline: Product-wise batch analysis
+    Given batches for product "<product_name>" exist in the source table
+    When batches are grouped by product_name and aggregated:
+      | total_batches = count(batch_id) |
+      | passed_batches = count where quality_status = "pass" |
+      | failed_batches = count where quality_status = "fail" |
+      | percentage_passed = (passed_batches / total_batches) * 100 |
+    Then the output DataFrame "product_wise_analysis_df" contains:
+      | product_name | total_batches | passed_batches | failed_batches | percentage_passed |
+    Examples:
+      | product_name   | total_batches | passed_batches | failed_batches | percentage_passed |
+      | WidgetA        | 10            | 8              | 2              | 80.0              |
+      | WidgetB        | 5             | 5              | 0              | 100.0             |
+      | WidgetC        | 7             | 3              | 4              | 42.86             |
+      | WidgetD        | 1             | 0              | 1              | 0.0               |
+      | WidgetE        | 2             | 2              | 0              | 100.0             |
+
+  Scenario: Batch-wise summary of production
+    Given all batches are processed with computed quality_status
+    When aggregating across all products:
+      | total_batches = count(batch_id) |
+      | total_passed_batches = count where quality_status = "pass" |
+      | total_failed_batches = count where quality_status = "fail" |
+    Then the output DataFrame "batch_wise_summary_df" contains:
+      | total_batches | total_passed_batches | total_failed_batches |
+
+  Scenario Outline: Validation - missing required fields
+    Given a batch record with missing "<missing_field>"
+    When processing the batch for quality status
+    Then an error is raised: "Missing required field: <missing_field>"
+    Examples:
+      | missing_field      |
+      | batch_id           |
+      | product_name       |
+      | quality_check_score|
+
+  Scenario Outline: Validation - type mismatch
+    Given a batch record where "<field>" has invalid type "<invalid_type>"
+    When processing the batch for quality status
+    Then an error is raised: "Type mismatch in field: <field> (expected <expected_type>, got <invalid_type>)"
+    Examples:
+      | field               | invalid_type | expected_type |
+      | batch_id            | int          | string        |
+      | product_name        | int          | string        |
+      | quality_check_score | string       | double        |
+      | quantity            | string       | bigint        |
+
+  Scenario Outline: Validation - duplicate batch_id
+    Given two or more records with the same batch_id "<duplicate_batch_id>"
+    When processing batch-wise quality status
+    Then an error is raised: "Duplicate batch_id detected: <duplicate_batch_id>"
+    Examples:
+      | duplicate_batch_id |
+      | BATCH001           |
+      | BATCH002           |
+
+  Scenario Outline: Edge case - boundary quality_check_score
+    Given a batch with quality_check_score = <score>
+    When computing quality_status
+    Then the quality_status is "<expected_status>"
+    Examples:
+      | score | expected_status |
+      | 97.0  | pass           |
+      | 96.99 | fail           |
+      | 100.0 | pass           |
+      | 0.0   | fail           |
+
+  Scenario: Output structure validation
+    Given the three output DataFrames are produced
+    Then "product_wise_analysis_df" has columns:
+      | product_name | total_batches | passed_batches | failed_batches | percentage_passed |
+    And "batch_wise_quality_status_df" has columns:
+      | batch_id | product_name | quality_check_score | quality_status |
+    And "batch_wise_summary_df" has columns:
+      | total_batches | total_passed_batches | total_failed_batches |
+
+  Scenario: PySpark code implementation
+    Given the requirements and output structure
+    When writing the PySpark code
+    Then the code must:
+      | 1. Read from "purgo_databricks.purgo_playground.batch_qc" |
+      | 2. Compute "quality_status" column per batch |
+      | 3. Aggregate product-wise analysis as specified |
+      | 4. Aggregate batch-wise summary as specified |
+      | 5. Output three DataFrames: product_wise_analysis_df, batch_wise_quality_status_df, batch_wise_summary_df |
+      | 6. Contain no syntax errors |
+
+  Scenario Outline: Error handling - invalid quality_check_score values
+    Given a batch record with quality_check_score = <invalid_score>
+    When processing for quality status
+    Then an error is raised: "Invalid quality_check_score: <invalid_score>"
+    Examples:
+      | invalid_score |
+      | null          |
+      | -1            |
+      | 'NaN'         |
+
+  Scenario: Null/empty product_name handling
+    Given a batch record with product_name = null or empty string
+    When processing for product-wise analysis
+    Then the batch is excluded from product-wise aggregation
+    And an error is logged: "Null or empty product_name in batch_id <batch_id>"
+
+  Scenario: Consistency of output counts
+    Given all batches are processed
+    When comparing total_batches in all outputs
+    Then total_batches in batch_wise_summary_df equals sum of total_batches in product_wise_analysis_df
+    And equals count of rows in batch_wise_quality_status_df
+
+# END
