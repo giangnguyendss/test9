@@ -1,0 +1,199 @@
+Feature: Data Profiling for Metric Tables in Unity Catalog
+
+  Background:
+    Given the Databricks environment is configured with Unity Catalog "purgo_databricks" and schema "purgo_playground"
+    And the metric tables "health_insurance_claims_metric", "d_product_revenue_metric", and "s_field_reporting_sales_source_customer_metric" exist in the schema
+    And the output table "metric_profile" exists with the required schema
+
+  # Happy Path: Profile all columns in all metric tables
+  Scenario Outline: Generate data profile for each column in metric tables
+    Given the metric table "<table_name>" contains column "<column_name>" of type "<data_type>"
+    When the PySpark profiling script is executed
+    Then a row is written to "metric_profile" with:
+      | table_name   | column_name   | data_type   | null_count   | distinct_count   | total_count   | min_value   | max_value   | mean   |
+      | <table_name> | <column_name> | <data_type> | <null_count> | <distinct_count> | <total_count> | <min_value> | <max_value> | <mean> |
+    And the values for min_value, max_value, and mean are calculated as follows:
+      | data_type | min_value rule | max_value rule | mean rule |
+      | string    | lexicographical min | lexicographical max | null      |
+      | bigint    | numeric min         | numeric max         | average   |
+      | double    | numeric min         | numeric max         | average   |
+      | int       | numeric min         | numeric max         | average   |
+      | date      | earliest date       | latest date         | null      |
+      | boolean   | min(0/1)            | max(0/1)            | average (as double) |
+    And all values are cast to string except mean, which is double or null
+
+    Examples:
+      | table_name                                   | column_name                | data_type | null_count | distinct_count | total_count | min_value | max_value | mean   |
+      | health_insurance_claims_metric               | Claim_ID                   | string    | 0          | 1000           | 1000        | A0001     | Z9999     | null   |
+      | health_insurance_claims_metric               | Age                        | bigint    | 10         | 60             | 1000        | 18        | 99        | 45.2   |
+      | health_insurance_claims_metric               | Service_Date               | date      | 0          | 365            | 1000        | 2023-01-01| 2023-12-31| null   |
+      | health_insurance_claims_metric               | is_fraud                   | boolean   | 0          | 2              | 1000        | 0         | 1         | 0.03   |
+      | d_product_revenue_metric                     | product_id                 | bigint    | 0          | 100            | 500         | 1         | 100       | 50.5   |
+      | d_product_revenue_metric                     | product_name               | string    | 0          | 100            | 500         | Alpha     | Zulu      | null   |
+      | d_product_revenue_metric                     | first_purchase_date        | date      | 5          | 365            | 500         | 2022-01-01| 2022-12-31| null   |
+      | d_product_revenue_metric                     | customer_first_revenue     | double    | 20         | 200            | 500         | 10.0      | 1000.0    | 250.5  |
+      | s_field_reporting_sales_source_customer_metric| evenity_unit_hash          | int       | 0          | 8              | 100         | 1         | 8         | 4.5    |
+      | s_field_reporting_sales_source_customer_metric| pt_cdl_uuid                | string    | 0          | 100            | 100         | 0001      | 0100      | null   |
+
+  # Error Path: Table does not exist
+  Scenario: Profiling fails when metric table is missing
+    Given the metric table "non_existent_metric_table" does not exist in the schema
+    When the PySpark profiling script is executed
+    Then an error is raised with message "Table non_existent_metric_table not found in purgo_databricks.purgo_playground"
+
+  # Error Path: Column does not exist in table
+  Scenario: Profiling fails when column is missing
+    Given the metric table "health_insurance_claims_metric" exists
+    And the column "NonExistentColumn" does not exist in the table
+    When the PySpark profiling script attempts to profile "NonExistentColumn"
+    Then an error is raised with message "Column NonExistentColumn not found in table health_insurance_claims_metric"
+
+  # Error Path: Data type mismatch in metric_profile output
+  Scenario Outline: Data type mismatch when writing to metric_profile
+    Given the profiling result for "<column_name>" in "<table_name>" has value "<mean>" of type "<actual_type>"
+    And the metric_profile schema expects "mean" as double
+    When the script attempts to write the result
+    Then an error is raised with message "Type mismatch for mean: expected double, got <actual_type>"
+
+    Examples:
+      | table_name                       | column_name   | mean   | actual_type |
+      | health_insurance_claims_metric   | Gender        | null   | string      |
+      | d_product_revenue_metric         | product_name  | null   | string      |
+      | s_field_reporting_sales_source_customer_metric | market_name | null | string |
+
+  # Error Path: Duplicate profile rows for same column
+  Scenario: Duplicate profile rows detected
+    Given the profiling script generates multiple rows for the same table_name and column_name
+    When writing to metric_profile
+    Then an error is raised with message "Duplicate profile rows for table_name=<table_name>, column_name=<column_name>"
+
+  # Validation: All required fields present in metric_profile
+  Scenario Outline: Validate required fields in metric_profile output
+    Given a profile row for "<table_name>" and "<column_name>" is written to metric_profile
+    When the row is validated
+    Then the following fields must be present and not null (except mean, min_value, max_value for non-numeric types):
+      | table_name   | column_name   | data_type   | null_count   | distinct_count   | total_count |
+    And for non-numeric columns, mean must be null
+
+    Examples:
+      | table_name                       | column_name   | data_type |
+      | health_insurance_claims_metric   | Gender        | string    |
+      | d_product_revenue_metric         | product_name  | string    |
+      | s_field_reporting_sales_source_customer_metric | market_name | string |
+
+  # Validation: Allowed data types for profiling
+  Scenario Outline: Validate allowed data types for profiling
+    Given the column "<column_name>" in "<table_name>" has data type "<data_type>"
+    When profiling is performed
+    Then the data type must be one of: string, bigint, double, int, date, boolean
+    And if not, an error is raised with message "Unsupported data type <data_type> for column <column_name>"
+
+    Examples:
+      | table_name                       | column_name   | data_type |
+      | health_insurance_claims_metric   | Claim_ID      | string    |
+      | d_product_revenue_metric         | product_id    | bigint    |
+      | s_field_reporting_sales_source_customer_metric | evenity_unit_hash | int |
+      | health_insurance_claims_metric   | Service_Date  | date      |
+      | health_insurance_claims_metric   | is_fraud      | boolean   |
+
+  # Validation: Null handling for mean/min/max
+  Scenario Outline: Null handling for mean/min/max in non-numeric columns
+    Given the column "<column_name>" in "<table_name>" is of type "<data_type>"
+    When profiling is performed
+    Then mean must be null for non-numeric types
+    And min_value and max_value must be null for boolean columns
+
+    Examples:
+      | table_name                       | column_name   | data_type |
+      | health_insurance_claims_metric   | Gender        | string    |
+      | health_insurance_claims_metric   | is_fraud      | boolean   |
+      | d_product_revenue_metric         | product_name  | string    |
+      | s_field_reporting_sales_source_customer_metric | market_name | string |
+
+  # Validation: Total count consistency
+  Scenario Outline: Validate total_count matches table row count
+    Given the metric table "<table_name>" has "<row_count>" rows
+    When profiling is performed
+    Then total_count for each column must be "<row_count>"
+
+    Examples:
+      | table_name                                   | row_count |
+      | health_insurance_claims_metric               | 1000      |
+      | d_product_revenue_metric                     | 500       |
+      | s_field_reporting_sales_source_customer_metric| 100       |
+
+  # Validation: Distinct count calculation
+  Scenario Outline: Validate distinct_count calculation
+    Given the column "<column_name>" in "<table_name>" has "<distinct_count>" distinct values
+    When profiling is performed
+    Then distinct_count in metric_profile must be "<distinct_count>"
+
+    Examples:
+      | table_name                       | column_name   | distinct_count |
+      | health_insurance_claims_metric   | Diagnosis_Code| 50            |
+      | d_product_revenue_metric         | product_id    | 100           |
+      | s_field_reporting_sales_source_customer_metric | evenity_unit_hash | 8 |
+
+  # Validation: Null count calculation
+  Scenario Outline: Validate null_count calculation
+    Given the column "<column_name>" in "<table_name>" has "<null_count>" null values
+    When profiling is performed
+    Then null_count in metric_profile must be "<null_count>"
+
+    Examples:
+      | table_name                       | column_name   | null_count |
+      | health_insurance_claims_metric   | Age           | 10        |
+      | d_product_revenue_metric         | customer_first_revenue | 20 |
+      | s_field_reporting_sales_source_customer_metric | market_name | 0 |
+
+  # Validation: Min/Max calculation for string columns
+  Scenario Outline: Validate min/max for string columns
+    Given the column "<column_name>" in "<table_name>" is of type "string"
+    When profiling is performed
+    Then min_value is the lexicographically smallest value
+    And max_value is the lexicographically largest value
+
+    Examples:
+      | table_name                       | column_name   | min_value | max_value |
+      | health_insurance_claims_metric   | Claim_ID      | A0001     | Z9999     |
+      | d_product_revenue_metric         | product_name  | Alpha     | Zulu      |
+      | s_field_reporting_sales_source_customer_metric | pt_cdl_uuid | 0001 | 0100 |
+
+  # Validation: Min/Max calculation for date columns
+  Scenario Outline: Validate min/max for date columns
+    Given the column "<column_name>" in "<table_name>" is of type "date"
+    When profiling is performed
+    Then min_value is the earliest date
+    And max_value is the latest date
+
+    Examples:
+      | table_name                       | column_name           | min_value    | max_value    |
+      | health_insurance_claims_metric   | Service_Date          | 2023-01-01   | 2023-12-31   |
+      | d_product_revenue_metric         | first_purchase_date   | 2022-01-01   | 2022-12-31   |
+
+  # Validation: Mean calculation for numeric columns
+  Scenario Outline: Validate mean for numeric columns
+    Given the column "<column_name>" in "<table_name>" is of type "<data_type>"
+    When profiling is performed
+    Then mean is calculated as the average of non-null values
+
+    Examples:
+      | table_name                       | column_name   | data_type | mean   |
+      | health_insurance_claims_metric   | Age           | bigint    | 45.2   |
+      | d_product_revenue_metric         | customer_first_revenue | double | 250.5 |
+      | s_field_reporting_sales_source_customer_metric | evenity_unit_hash | int | 4.5 |
+
+  # Validation: Mean is null for non-numeric columns
+  Scenario Outline: Validate mean is null for non-numeric columns
+    Given the column "<column_name>" in "<table_name>" is of type "<data_type>"
+    When profiling is performed
+    Then mean in metric_profile is null
+
+    Examples:
+      | table_name                       | column_name   | data_type |
+      | health_insurance_claims_metric   | Gender        | string    |
+      | d_product_revenue_metric         | product_name  | string    |
+      | s_field_reporting_sales_source_customer_metric | market_name | string |
+      | health_insurance_claims_metric   | Service_Date  | date      |
+
+  # END
