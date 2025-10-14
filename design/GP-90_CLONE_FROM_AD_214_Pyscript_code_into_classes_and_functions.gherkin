@@ -1,131 +1,77 @@
-Feature: Sales KPI Table Generation via PySpark Refactored Classes and Functions
+Feature: PySpark Data Processing Codebase Refactoring
+  As a data engineer, I want to refactor the existing PySpark data processing codebase into reusable classes and functions,
+  following data engineering best practices, to improve maintainability, enable code reuse, and prepare the codebase for future enhancements.
 
   Background:
-    Given the Unity Catalog tables "purgo_playground.product_data", "purgo_playground.product_sales_data", and "purgo_playground.product_marketshare_data" exist
-    And the output table "purgo_playground.sales_kpi" exists with schema:
-      | sales_year | int    |
-      | sales_product_id | string |
-      | product_name | string |
-      | market_segment | string |
-      | total_sales | bigint |
-      | prev_year_sales | bigint |
-      | yoy_growth_pct | double |
-      | avg_market_share | double |
-      | market_penetration_flag | string |
-      | sales_rank | int |
+    Given the Unity Catalog 'purgo_databricks'
+    And the Unity Catalog Schema 'purgo_playground'
+    And the tables 'product_data', 'product_sales_data', and 'product_marketshare_data'
 
-  Scenario: Happy path - Generate sales KPI table with all required metrics
-    Given product_data contains valid product_id, product_name, market_segment
-    And product_sales_data contains valid sales_product_id, sales_amount, sales_date
-    And product_marketshare_data contains valid ms_product_id, market_share_pct
-    When the refactored PySpark pipeline is executed
-    Then the output table "purgo_playground.sales_kpi" is written in overwrite mode
-    And each row contains:
-      | sales_year | sales_product_id | product_name | market_segment | total_sales | prev_year_sales | yoy_growth_pct | avg_market_share | market_penetration_flag | sales_rank |
-    And total_sales is the sum of sales_amount for each (sales_product_id, sales_year)
-    And prev_year_sales is the total_sales for the previous year for the same sales_product_id, or null if not available
-    And yoy_growth_pct is ((total_sales - prev_year_sales) / prev_year_sales) * 100, rounded to 2 decimals, or null if prev_year_sales is null
-    And avg_market_share is the average market_share_pct for each (sales_product_id, sales_year), rounded to 2 decimals
-    And market_penetration_flag is "High" if avg_market_share > 25, "Medium" if avg_market_share between 10 and 25, "Low" otherwise
-    And sales_rank is the rank of total_sales within each sales_year, descending
+  Scenario: Load Data Sources
+    Given the Spark Session is started
+    When the data sources are loaded
+    Then the data frames 'product_df', 'sales_df', and 'market_share_df' are created
 
-  Scenario Outline: Validation - Required fields and types in input tables
-    Given <table> contains a row with <field> missing or null
-    When the pipeline is executed
-    Then the row is excluded from KPI calculation
+  Scenario: Initial Cleanup
+    Given the data frames 'sales_df' and 'market_share_df'
+    When the initial cleanup is performed
+    Then the data frames 'sales_df' and 'market_share_df' are cleaned and transformed
+
+  Scenario: Join Product Info
+    Given the data frames 'sales_df' and 'product_df'
+    When the product information is joined with sales data
+    Then the data frame 'sales_enriched_df' is created
+
+  Scenario: Join Market Share Info
+    Given the data frames 'sales_enriched_df' and 'market_share_df'
+    When the market share information is joined with sales data
+    Then the data frame 'sales_market_df' is created
+
+  Scenario: KPI Calculation
+    Given the data frame 'sales_market_df'
+    When the KPIs (total sales, YoY growth, market penetration) are calculated
+    Then the data frame 'sales_agg_df' is created
+
+  Scenario: Rank Products by Sales per Year
+    Given the data frame 'sales_agg_df'
+    When the products are ranked by sales per year
+    Then the data frame 'sales_agg_df' is updated with the sales rank
+
+  Scenario: Final Output Format
+    Given the data frame 'sales_agg_df'
+    When the final output format is applied
+    Then the data frame 'final_df' is created
+
+  Scenario: Write Output
+    Given the data frame 'final_df'
+    When the output is written to the table 'purgo_playground.sales_kpi'
+    Then the output is successfully written
+
+  Scenario Outline: Data Validation
+    Given the data frame 'sales_agg_df'
+    When the data validation is performed
+    Then the data is valid and consistent
+
     Examples:
-      | table                        | field             |
-      | product_sales_data           | sales_amount      |
-      | product_sales_data           | sales_date        |
-      | product_data                 | product_id        |
-      | product_marketshare_data     | market_share_pct  |
+      | column_name | data_type | nullable |
+      | sales_year  | int       | false    |
+      | sales_product_id | string  | false    |
+      | product_name | string  | false    |
+      | market_segment | string  | false    |
+      | total_sales | bigint  | false    |
+      | prev_year_sales | bigint  | true     |
+      | yoy_growth_pct | double  | true     |
+      | avg_market_share | double  | true     |
+      | market_penetration_flag | string  | true     |
+      | sales_rank | int       | true     |
 
-  Scenario Outline: Validation - Type mismatches in input tables
-    Given <table> contains a row with <field> of incorrect type
-    When the pipeline is executed
-    Then an error is raised indicating type mismatch for <field>
+  Scenario Outline: Error Handling
+    Given the data frame 'sales_agg_df'
+    When an error occurs during processing
+    Then the error is caught and handled
+
     Examples:
-      | table                        | field             |
-      | product_sales_data           | sales_amount      |
-      | product_marketshare_data     | market_share_pct  |
-      | product_data                 | product_id        |
-
-  Scenario Outline: Validation - Duplicate keys in input tables
-    Given <table> contains duplicate rows for <key>
-    When the pipeline is executed
-    Then duplicates are aggregated as per groupBy logic
-    Examples:
-      | table                        | key                        |
-      | product_sales_data           | sales_product_id,sales_year|
-      | product_marketshare_data     | ms_product_id              |
-
-  Scenario: Error path - Missing input table
-    Given the table "purgo_playground.product_sales_data" does not exist
-    When the pipeline is executed
-    Then an error is raised: "Input table purgo_playground.product_sales_data not found"
-
-  Scenario: Error path - Output table write failure
-    Given the output table "purgo_playground.sales_kpi" is locked or unavailable
-    When the pipeline attempts to write
-    Then an error is raised: "Failed to write to purgo_playground.sales_kpi"
-
-  Scenario Outline: Market Penetration Flag logic
-    Given avg_market_share is <avg_market_share>
-    When market_penetration_flag is calculated
-    Then the value is <flag>
-    Examples:
-      | avg_market_share | flag    |
-      | 30.0             | High    |
-      | 25.0             | Medium  |
-      | 10.0             | Medium  |
-      | 9.99             | Low     |
-      | null             | Low     |
-
-  Scenario Outline: YoY Growth calculation
-    Given total_sales is <total_sales> and prev_year_sales is <prev_year_sales>
-    When yoy_growth_pct is calculated
-    Then the value is <yoy_growth_pct>
-    Examples:
-      | total_sales | prev_year_sales | yoy_growth_pct |
-      | 2000        | 1000            | 100.00         |
-      | 1500        | 1500            | 0.00           |
-      | 1000        | null            | null           |
-      | 0           | 1000            | -100.00        |
-
-  Scenario Outline: Sales Rank assignment
-    Given sales_year is <sales_year> and total_sales values are <sales_list>
-    When sales_rank is assigned
-    Then the product with highest total_sales gets rank 1, next gets 2, etc.
-    Examples:
-      | sales_year | sales_list      | expected_ranks |
-      | 2023       | [5000,4000,3000]| [1,2,3]        |
-      | 2022       | [1000,1000,500] | [1,1,3]        |
-
-  Scenario: Data cleaning and renaming
-    Given product_sales_data contains column "product_id"
-    When the pipeline is executed
-    Then the column is renamed to "sales_product_id"
-    And only rows with non-null sales_amount are processed
-
-  Scenario: Joins and enrichment
-    Given sales_product_id exists in product_data and product_marketshare_data
-    When the pipeline is executed
-    Then product_name and market_segment are joined from product_data
-    And market_share_pct is joined from product_marketshare_data
-
-  Scenario: Final output selection
-    When the pipeline completes KPI calculation
-    Then only the following columns are selected for output:
-      | sales_year | sales_product_id | product_name | market_segment | total_sales | prev_year_sales | yoy_growth_pct | avg_market_share | market_penetration_flag | sales_rank |
-
-  Scenario: Display step for interactive use
-    When the pipeline completes
-    Then the final DataFrame is displayed for review
-
-  Scenario: Refactoring into classes and functions
-    Given the original script logic
-    When the code is refactored
-    Then each logical block (data loading, cleaning, joining, aggregation, output) is encapsulated in a function or class method
-    And the logic and output remain unchanged
-
-# END
+      | error_message | error_code |
+      | Invalid data  | 1001       |
+      | Data not found | 1002       |
+      | Processing error | 1003       |
