@@ -1,160 +1,61 @@
-Feature: Product Sales Analysis Logic Updates
+Feature: Update Sales Data Transformations
 
   Background:
-    Given the product sales data is loaded from Unity Catalog schema purgo_playground
-    And the following columns exist in the sales dataset: sales_amount, bonus_eligibility, performance_flag, product_perf_band
-    And rep_summary is aggregated per rep with total_rep_sales
+    Given the Unity Catalog is "purgo_databricks"
+    And the Unity Catalog Schema is "purgo_playground"
+    And the table "sales_data_transformed" exists in the schema
 
-  Scenario Outline: Update Bonus Eligibility per Transaction
-    Given a sales transaction with sales_amount <sales_amount>
-    When the bonus eligibility logic is applied
-    Then bonus_eligibility should be "<expected_bonus_eligibility>"
-
-    Examples:
-      | sales_amount | expected_bonus_eligibility |
-      | 26000        | Yes                       |
-      | 25000        | <existing_logic>          |
-      | 24999        | <existing_logic>          |
-
-  Scenario Outline: Update Performance Flag per Transaction
-    Given a sales transaction with sales_amount <sales_amount>
-    When the performance_flag logic is applied
-    Then performance_flag should be "<expected_flag>"
+  Scenario Outline: Update Bonus Eligibility
+    Given the sales amount is <sales_amount>
+    When the bonus eligibility is updated
+    Then the bonus eligibility should be "<bonus_eligibility>"
 
     Examples:
-      | sales_amount | expected_flag |
-      | 9500         | High         |
-      | 9001         | High         |
-      | 9000         | Medium       |
-      | 8000         | Medium       |
-      | 7001         | Medium       |
-      | 7000         | Low          |
-      | 5000         | Low          |
+      | sales_amount | bonus_eligibility |
+      | 25001        | Yes               |
+      | 25000        | No                |
 
-  Scenario Outline: Update Product Performance Band per Transaction
-    Given a sales transaction with sales_amount <sales_amount>
-    When the product_perf_band logic is applied
-    Then product_perf_band should be "<expected_band>"
+  Scenario Outline: Update Performance Flag
+    Given the sales amount is <sales_amount>
+    When the performance flag is updated
+    Then the performance flag should be "<performance_flag>"
 
     Examples:
-      | sales_amount | expected_band |
-      | 15000        | Excellent    |
-      | 10001        | Excellent    |
-      | 10000        | Good         |
-      | 9000         | Good         |
-      | 8001         | Good         |
-      | 8000         | Moderate     |
-      | 5001         | Moderate     |
-      | 5000         | <existing_or_poor> |
+      | sales_amount | performance_flag |
+      | 9001         | High             |
+      | 9000         | Medium           |
+      | 7001         | Medium           |
+      | 7000         | Low              |
 
-  Scenario Outline: Add Rep Tier to rep_summary
-    Given a rep_summary record with total_rep_sales <total_rep_sales>
-    When the rep_tier logic is applied
-    Then rep_tier should be "<expected_tier>"
+  Scenario Outline: Update Product Performance Band
+    Given the sales amount is <sales_amount>
+    When the product performance band is updated
+    Then the product performance band should be "<product_perf_band>"
 
     Examples:
-      | total_rep_sales | expected_tier   |
-      | 50000           | Platinum Plus   |
-      | 45001           | Platinum Plus   |
-      | 45000           | Platinum        |
-      | 40000           | Platinum        |
-      | 35001           | Platinum        |
-      | 35000           | Gold            |
-      | 30000           | Gold            |
-      | 25001           | Gold            |
-      | 25000           | Silver          |
-      | 20000           | Silver          |
+      | sales_amount | product_perf_band |
+      | 10001        | Excellent         |
+      | 10000        | Good              |
+      | 8001         | Good              |
+      | 8000         | Moderate          |
+      | 5001         | Moderate          |
+      | 5000         | Poor              |
 
-  Scenario: Display Final Output with Updated Columns
-    Given all logic updates have been applied to the sales and rep_summary datasets
-    When the final output is displayed
-    Then the output should include the updated columns: bonus_eligibility, performance_flag, product_perf_band, rep_tier
-
-  Scenario Outline: Validation - sales_amount Type
-    Given a sales transaction with sales_amount value <sales_amount>
-    When the logic is applied
-    Then if sales_amount is not numeric, an error "sales_amount must be numeric" should be raised
+  Scenario Outline: Update Rep Tier
+    Given the total sales amount is <total_sales_amount>
+    When the rep tier is updated
+    Then the rep tier should be "<rep_tier>"
 
     Examples:
-      | sales_amount |
-      | "abc"        |
-      | null         |
+      | total_sales_amount | rep_tier      |
+      | 45001              | Platinum Plus |
+      | 45000              | Platinum      |
+      | 35001              | Platinum      |
+      | 35000              | Gold          |
+      | 25001              | Gold          |
+      | 25000              | Silver        |
 
-  Scenario Outline: Validation - total_rep_sales Type
-    Given a rep_summary record with total_rep_sales value <total_rep_sales>
-    When the rep_tier logic is applied
-    Then if total_rep_sales is not numeric, an error "total_rep_sales must be numeric" should be raised
-
-    Examples:
-      | total_rep_sales |
-      | "xyz"           |
-      | null            |
-
-  Scenario: Validation - Missing Required Columns
-    Given the sales dataset is missing the sales_amount column
-    When the logic is applied
-    Then an error "Missing required column: sales_amount" should be raised
-
-  Scenario: Validation - Duplicate rep_summary Records
-    Given rep_summary contains duplicate rep_id records
-    When the rep_tier logic is applied
-    Then an error "Duplicate rep_id found in rep_summary" should be raised
-
-  Scenario Outline: Validation - Allowed Values for rep_tier
-    Given a rep_summary record with calculated rep_tier value <rep_tier>
+  Scenario: Display Output
+    Given the sales data is updated
     When the output is displayed
-    Then rep_tier should be one of ["Platinum Plus", "Platinum", "Gold", "Silver"]
-
-    Examples:
-      | rep_tier      |
-      | Platinum Plus |
-      | Platinum      |
-      | Gold          |
-      | Silver        |
-      | "Diamond"     |
-
-  Scenario Outline: Validation - Allowed Values for performance_flag
-    Given a sales transaction with calculated performance_flag value <performance_flag>
-    When the output is displayed
-    Then performance_flag should be one of ["High", "Medium", "Low"]
-
-    Examples:
-      | performance_flag |
-      | High             |
-      | Medium           |
-      | Low              |
-      | "Super"          |
-
-  Scenario Outline: Validation - Allowed Values for product_perf_band
-    Given a sales transaction with calculated product_perf_band value <product_perf_band>
-    When the output is displayed
-    Then product_perf_band should be one of ["Excellent", "Good", "Moderate", "<existing_or_poor>"]
-
-    Examples:
-      | product_perf_band |
-      | Excellent         |
-      | Good              |
-      | Moderate          |
-      | Poor              |
-
-  Scenario: Error Path - Null sales_amount
-    Given a sales transaction with sales_amount null
-    When the logic is applied
-    Then an error "sales_amount cannot be null" should be raised
-
-  Scenario: Error Path - Null total_rep_sales
-    Given a rep_summary record with total_rep_sales null
-    When the rep_tier logic is applied
-    Then an error "total_rep_sales cannot be null" should be raised
-
-  Scenario: Error Path - Missing rep_summary
-    Given rep_summary is missing from the dataset
-    When the rep_tier logic is applied
-    Then an error "rep_summary dataset not found" should be raised
-
-  Scenario: Error Path - Display Output with Missing Columns
-    Given the output is displayed without the updated columns
-    When the output is validated
-    Then an error "Output missing required columns: bonus_eligibility, performance_flag, product_perf_band, rep_tier" should be raised
-
-# END
+    Then the updated sales data should be displayed
