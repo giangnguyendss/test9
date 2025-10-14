@@ -1,0 +1,70 @@
+Feature: Compute metric columns by executing SQL queries from the metric_master table
+
+  Background:
+    Given the Unity Catalog information:
+      | catalog       | schema          |
+      | purgo_databricks | purgo_playground |
+    And the following tables exist:
+      | table_name                |
+      | metric_config             |
+      | metric_master             |
+      | medical_inquiry_data      |
+      | mska                      |
+
+  Scenario Outline: Execute SQL queries from the metric_master table in the correct order
+    Given the metric_config table contains the following data:
+      | metric_id | active_indicator | source_table | primary_key | target_table |
+      | <metric_id> | <active_indicator> | <source_table> | <primary_key> | <target_table> |
+    And the metric_master table contains the following data:
+      | metric_template_name | sql_query | view_name | dependency |
+      | <metric_template_name> | <sql_query> | <view_name> | <dependency> |
+    When the PySpark script is executed
+    Then the SQL queries are executed in the correct order based on the dependency column
+    And the results are loaded into the target tables
+
+    Examples:
+      | metric_id | active_indicator | source_table | primary_key | target_table | metric_template_name | sql_query | view_name | dependency |
+      | metric1   | Y                | medical_inquiry_data | id          | mska         | metric1_template    | SELECT * FROM medical_inquiry_data | null      | 1          |
+      | metric2   | Y                | mska                | id          | mska         | metric2_template    | SELECT * FROM mska | null      | 2          |
+
+  Scenario: Handle cases where the view_name column is null
+    Given the metric_config table contains the following data:
+      | metric_id | active_indicator | source_table | primary_key | target_table |
+      | metric1   | Y                | medical_inquiry_data | id          | mska         |
+    And the metric_master table contains the following data:
+      | metric_template_name | sql_query | view_name | dependency |
+      | metric1_template    | SELECT * FROM medical_inquiry_data | null      | 1          |
+    When the PySpark script is executed
+    Then the results are loaded directly into the target table
+
+  Scenario: Handle errors that occur during execution
+    Given the metric_config table contains the following data:
+      | metric_id | active_indicator | source_table | primary_key | target_table |
+      | metric1   | Y                | medical_inquiry_data | id          | mska         |
+    And the metric_master table contains the following data:
+      | metric_template_name | sql_query | view_name | dependency |
+      | metric1_template    | SELECT * FROM non_existent_table | null      | 1          |
+    When the PySpark script is executed
+    Then an error is logged indicating that the table does not exist
+
+  Scenario: Handle circular dependencies
+    Given the metric_config table contains the following data:
+      | metric_id | active_indicator | source_table | primary_key | target_table |
+      | metric1   | Y                | medical_inquiry_data | id          | mska         |
+      | metric2   | Y                | mska                | id          | mska         |
+    And the metric_master table contains the following data:
+      | metric_template_name | sql_query | view_name | dependency |
+      | metric1_template    | SELECT * FROM medical_inquiry_data | null      | 1          |
+      | metric2_template    | SELECT * FROM mska | null      | 1          |
+    When the PySpark script is executed
+    Then an error is logged indicating a circular dependency
+
+  Scenario: Handle missing dependencies
+    Given the metric_config table contains the following data:
+      | metric_id | active_indicator | source_table | primary_key | target_table |
+      | metric1   | Y                | medical_inquiry_data | id          | mska         |
+    And the metric_master table contains the following data:
+      | metric_template_name | sql_query | view_name | dependency |
+      | metric1_template    | SELECT * FROM medical_inquiry_data | null      | 2          |
+    When the PySpark script is executed
+    Then an error is logged indicating a missing dependency
