@@ -1,0 +1,76 @@
+Feature: Convert Spark SQL code to PySpark code
+  As a data engineer
+  I want to convert the provided Spark SQL code to PySpark code
+  So that I can use it in a production environment
+
+  Background:
+    Given the Unity Catalog is "purgo_databricks"
+    And the Unity Catalog Schema is "purgo_playground"
+    And the target table path is retrieved using dbutils.widgets.get("target_table_path")
+    And the partition key is retrieved using dbutils.widgets.get("partition")
+    And the table format is retrieved using dbutils.widgets.get("table_format")
+    And the compression is retrieved using dbutils.widgets.get("compression")
+    And the table name is retrieved using dbutils.widgets.get("table_name")
+    And the unity catalog is retrieved using dbutils.widgets.get("unity_catalog")
+    And the environment is retrieved using dbutils.widgets.get("environment")
+    And the project is retrieved using dbutils.widgets.get("project")
+    And the load type is retrieved using dbutils.widgets.get("load_type")
+    And the raw unity catalog is retrieved using dbutils.widgets.get("raw_unity_catalog")
+    And the raw unity catalog hist is retrieved using dbutils.widgets.get("raw_unity_catalog_hist")
+    And the config unity catalog is retrieved using dbutils.widgets.get("config_unity_catalog")
+    And the edp lkp unity catalog is retrieved using dbutils.widgets.get("edp_lkp_unity_catalog")
+    And the dims unity catalog is retrieved using dbutils.widgets.get("dims_unity_catalog")
+
+  Scenario: Create DataFrames for each table
+    Given the following tables:
+      | table_name |
+      | dw_ap_sla_aging_invoice_ca |
+      | dw_party_d |
+      | dw_supplier_site_d |
+      | dw_internal_org_d_tl |
+      | dw_ap_terms_d_tl |
+      | dw_natural_account_d |
+      | dw_gl_segment_d_tl |
+      | dw_gl_code_combination_d |
+      | edp_lkup |
+      | fnd_flex_values |
+      | fnd_flex_value_sets |
+      | fnd_flex_values_tl |
+    When I create a DataFrame for each table
+    Then I should have a DataFrame for each table
+
+  Scenario: Perform joins and transformations
+    Given the DataFrames created in the previous scenario
+    When I perform the joins and transformations defined in the Spark SQL code
+    Then I should have a resulting DataFrame with the correct schema and data
+
+  Scenario: Select final dataset
+    Given the resulting DataFrame from the previous scenario
+    When I select the final dataset
+    Then I should have a final DataFrame with the correct schema and data
+
+  Scenario Outline: Test different scenarios
+    Given the following input data:
+      | column1 | column2 |
+      | value1  | value2  |
+      | value3  | value4  |
+    When I run the PySpark code with the input data
+    Then I should get the expected output data:
+      | column1 | column2 |
+      | value5  | value6  |
+      | value7  | value8  |
+
+    Examples:
+      | column1 | column2 | value1 | value2 | value3 | value4 | value5 | value6 | value7 | value8 |
+      | foo     | bar     | 1      | 2      | 3      | 4      | 5      | 6      | 7      | 8      |
+      | foo     | bar     | 9      | 10     | 11     | 12     | 13     | 14     | 15     | 16     |
+
+  Scenario: Handle errors
+    Given an error occurs during the execution of the PySpark code
+    When I handle the error
+    Then I should get an error message indicating the cause of the error
+
+  Scenario: Optimize performance
+    Given the PySpark code is optimized for performance
+    When I run the optimized PySpark code
+    Then I should get the expected output data in a shorter amount of time
