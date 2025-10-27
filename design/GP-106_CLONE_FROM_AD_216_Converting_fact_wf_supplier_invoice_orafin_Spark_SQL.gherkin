@@ -1,170 +1,144 @@
-Feature: Conversion of Spark SQL logic for supplier invoice fact table to PySpark with Unity Catalog integration
+Feature: PySpark conversion and validation for Supplier Invoice Oracle Financials ETL
 
   Background:
-    Given the Unity Catalog is set to "purgo_databricks"
-    And the Unity Catalog schema is "purgo_playground"
-    And all required input parameters are provided via dbutils.widgets
-    And reusable functions and constants are imported from DA_CCG_RSD_EU
-    And the Spark session is configured for dynamic partition overwrite
-    And the control table is read using the provided config_unity_catalog and cl_control_table
-    And the job context is set using jobId logic (with fallback if not triggered by dbutils.notebook.run)
-    And all referenced tables exist and are accessible in the Unity Catalog
+    Given the Unity Catalog is "purgo_databricks" and schema is "purgo_playground"
+    And all required tables are available in the catalog
+    And all referenced functions from ReusableFunctions and Constants are imported and available in PySpark
+    And input parameters are provided via widgets:
+      | name                   | type    | example value           |
+      | target_table_path      | string  | "/mnt/purgo/target"     |
+      | partition              | string  | "fscl_yr_nbr"           |
+      | table_format           | string  | "delta"                 |
+      | compression            | string  | "snappy"                |
+      | table_name             | string  | "fact_wf_supplier_invoice_orafin" |
+      | unity_catalog          | string  | "purgo_databricks"      |
+      | environment            | string  | "prod"                  |
+      | project                | string  | "ccg_rsd_eu"            |
+      | load_type              | string  | "full"                  |
+      | view_unity_catalog_name| string  | "vw_supplier_invoice"   |
+      | raw_unity_catalog      | string  | "purgo_raw"             |
+      | raw_unity_catalog_hist | string  | "purgo_raw_hist"        |
+      | config_unity_catalog   | string  | "purgo_config"          |
+      | edp_lkp_unity_catalog  | string  | "purgo_edp_lkp"         |
+      | dims_unity_catalog     | string  | "purgo_dims"            |
 
-  Scenario Outline: Successful conversion of SQL logic to PySpark DataFrame
-    Given the following input parameters:
-      | target_table_path | partition_key | table_format | compression | table_name | unity_catalog | environment | project | load_type | view_unity_catalog_name | raw_unity_catalog | raw_unity_catalog_hist | config_unity_catalog | edp_lkp_unity_catalog | dims_unity_catalog |
-      | <target_table_path> | <partition_key> | <table_format> | <compression> | <table_name> | <unity_catalog> | <environment> | <project> | <load_type> | <view_unity_catalog_name> | <raw_unity_catalog> | <raw_unity_catalog_hist> | <config_unity_catalog> | <edp_lkp_unity_catalog> | <dims_unity_catalog> |
-    And all required functions (e.g., get_basejob_url, read_control_table) are available
-    When the PySpark code reads and transforms the following source tables:
-      | Table Name                        | Source Catalog         |
-      | dw_ap_sla_aging_invoice_ca        | <raw_unity_catalog>    |
-      | dw_ap_sla_expense_dist_cf         | <raw_unity_catalog>    |
-      | dw_party_d                        | <raw_unity_catalog>    |
-      | dw_supplier_site_d                | <raw_unity_catalog>    |
-      | dw_internal_org_d_tl              | <raw_unity_catalog>    |
-      | dw_ap_terms_d_tl                  | <raw_unity_catalog>    |
-      | dw_natural_account_d              | <raw_unity_catalog>    |
-      | dw_ap_sla_payments_cf             | <raw_unity_catalog>    |
-      | dw_gl_segment_d_tl                | <raw_unity_catalog>    |
-      | dw_gl_code_combination_d          | <raw_unity_catalog>    |
-      | edp_lkup                          | <edp_lkp_unity_catalog>|
-      | dim_wf_company                    | <dims_unity_catalog>   |
-    And the following transformations are applied:
-      | Step                                                                                 | Description                                                                                   |
-      | Window function for latest snapshot per invoice                                      | Use RowNumber partitioned by invoice_id, ordered by snapshot_captured_date DESC               |
-      | Window function for latest expense dist per distribution                             | Use RowNumber partitioned by multiple keys, ordered by xla_manual_override_flag DESC          |
-      | Join logic as per SQL (LEFT JOINs, COALESCE, CASE, etc.)                             | All joins and logic are replicated in PySpark using DataFrame API                             |
-      | Filtering by invoice_accounting_date, invoice_source_code, supplier_number, segments | All WHERE clause logic is implemented in PySpark                                              |
-      | Exclusion of specific concat_segments and supplier_numbers                           | Use .filter() and .isin()/.notin() as appropriate                                             |
-      | Null-safe logic for division code and other fields                                   | Use PySpark's when/otherwise and coalesce                                                     |
-      | All column casts and formatting (date_format, cast, concat_ws, etc.)                 | Use PySpark functions for type conversion and formatting                                      |
-    And the output DataFrame contains all required columns as per the SQL select
-    And the DataFrame is written to the target table path in the specified format and compression, partitioned by the partition key
-    Then the output table/view "<unity_catalog>.<table_name>" is created or overwritten successfully
-    And the job metadata (jobId, jobUrl) is logged for traceability
+  Scenario Outline: Successful PySpark ETL for supplier invoice fact table
+    Given all required input tables are loaded as DataFrames
+    And the control table is read successfully
+    When the PySpark pipeline applies the business logic as per the SQL transformation
+    And all joins, filters, and field mappings are performed as specified
+    And all hardcoded and NULL fields are set as per requirements
+    And the output DataFrame is written to <target_table_path> in <table_format> format with <compression> compression
+    And the table is partitioned by <partition>
+    Then the output table "<table_name>" in Unity Catalog "<unity_catalog>" contains the expected transformed data
 
     Examples:
-      | target_table_path | partition_key | table_format | compression | table_name         | unity_catalog     | environment | project | load_type | view_unity_catalog_name | raw_unity_catalog | raw_unity_catalog_hist | config_unity_catalog | edp_lkp_unity_catalog | dims_unity_catalog |
-      | /mnt/fact_wf_supplier_invoice_orafin | invoice_accounting_date | delta | snappy | fact_wf_supplier_invoice_orafin | purgo_playground | prod | CCG | full | vw_fact_wf_supplier_invoice_orafin | purgo_raw | purgo_raw_hist | purgo_config | purgo_edp_lkp | purgo_dims |
-      | /mnt/fact_wf_supplier_invoice_orafin | invoice_accounting_date | parquet | gzip | fact_wf_supplier_invoice_orafin | purgo_playground | dev | CCG | incremental | vw_fact_wf_supplier_invoice_orafin | purgo_raw | purgo_raw_hist | purgo_config | purgo_edp_lkp | purgo_dims |
+      | target_table_path      | table_format | compression | partition      | table_name                          | unity_catalog      |
+      | /mnt/purgo/target      | delta        | snappy      | fscl_yr_nbr    | fact_wf_supplier_invoice_orafin     | purgo_databricks   |
+      | /mnt/purgo/target2     | parquet      | gzip        | invc_entry_dt  | fact_wf_supplier_invoice_orafin     | purgo_databricks   |
 
-  Scenario Outline: Error when required input parameter is missing
-    Given the input parameter "<missing_param>" is not provided
-    When the PySpark code attempts to run
-    Then an error is raised with message "Missing required parameter: <missing_param>"
-
-    Examples:
-      | missing_param              |
-      | target_table_path          |
-      | partition_key              |
-      | table_format               |
-      | compression                |
-      | table_name                 |
-      | unity_catalog              |
-      | environment                |
-      | project                    |
-      | load_type                  |
-      | view_unity_catalog_name    |
-      | raw_unity_catalog          |
-      | raw_unity_catalog_hist     |
-      | config_unity_catalog       |
-      | edp_lkp_unity_catalog      |
-      | dims_unity_catalog         |
-
-  Scenario Outline: Error when input parameter type is invalid
-    Given the input parameter "<param>" is provided with value "<invalid_value>"
-    When the PySpark code validates input types
-    Then an error is raised with message "Invalid value for <param>: <invalid_value>"
+  Scenario Outline: Validation of required fields and types
+    Given the input DataFrame contains the following field "<field>"
+    When the pipeline validates the field type is "<type>"
+    Then the field "<field>" is present and of type "<type>"
+    And if the field is required and missing, an error "Missing required field: <field>" is raised
 
     Examples:
-      | param              | invalid_value      |
-      | partition_key      | 123                |
-      | table_format       | "unsupported_fmt"  |
-      | compression        | "none"             |
-      | unity_catalog      | ""                 |
-      | table_name         | ""                 |
+      | field                  | type    |
+      | invoice_id             | string  |
+      | invoice_accounting_date| date    |
+      | transaction_amount     | double  |
+      | supplier_party_id      | string  |
+      | supplier_site_id       | string  |
+      | invoice_number         | string  |
 
-  Scenario Outline: Error when referenced table does not exist or is inaccessible
-    Given the table "<table_name>" in catalog "<catalog>" does not exist or is inaccessible
-    When the PySpark code attempts to read the table
-    Then an error is raised with message "Table <catalog>.<table_name> not found or inaccessible"
-
-    Examples:
-      | table_name                  | catalog                |
-      | dw_ap_sla_aging_invoice_ca  | purgo_raw              |
-      | dw_ap_sla_expense_dist_cf   | purgo_raw              |
-      | dw_party_d                  | purgo_raw              |
-      | dw_supplier_site_d          | purgo_raw              |
-      | dw_internal_org_d_tl        | purgo_raw              |
-      | dw_ap_terms_d_tl            | purgo_raw              |
-      | dw_natural_account_d        | purgo_raw              |
-      | dw_ap_sla_payments_cf       | purgo_raw              |
-      | dw_gl_segment_d_tl          | purgo_raw              |
-      | dw_gl_code_combination_d    | purgo_raw              |
-      | edp_lkup                    | purgo_edp_lkp          |
-      | dim_wf_company              | purgo_dims             |
-
-  Scenario: Error when required function is missing
-    Given the function "read_control_table" is not available
-    When the PySpark code attempts to call the function
-    Then an error is raised with message "Function read_control_table not found"
-
-  Scenario: Error when required constant is missing
-    Given the constant "cl_control_table" is not defined
-    When the PySpark code attempts to use the constant
-    Then an error is raised with message "Constant cl_control_table not defined"
-
-  Scenario Outline: Error when duplicate records are found for upsert key
-    Given the upsert key "<upsert_key>" has duplicate records in the source data
-    When the PySpark code attempts to write to the target table
-    Then an error is raised with message "Duplicate records found for upsert key: <upsert_key>"
+  Scenario Outline: Validation of allowed values for specific fields
+    Given the field "<field>" in the input DataFrame
+    When the value is not in allowed values <allowed_values>
+    Then an error "Invalid value for <field>: <value>" is raised
 
     Examples:
-      | upsert_key                       |
-      | invoice_id                       |
-      | (invoice_distribution_id, invoice_id) |
+      | field                  | allowed_values         |
+      | invoice_source_code    | ['Receivables', 'MAINFRAME', 'OTHER'] |
+      | gl_balancing_segment   | [400, 700, 900]       |
 
-  Scenario Outline: Error when type mismatch occurs in transformation
-    Given the column "<column>" has value "<invalid_value>" which does not match expected type "<expected_type>"
-    When the PySpark code attempts to cast or transform the column
-    Then an error is raised with message "Type mismatch for column <column>: expected <expected_type>, got <invalid_value>"
+  Scenario: Filter out excluded supplier numbers
+    Given the supplier_number is in [00032238, 00032239, 00080463, 90000147]
+    When the pipeline processes the data
+    Then the record is excluded from the output
 
-    Examples:
-      | column                  | invalid_value | expected_type |
-      | transaction_amount      | "abc"         | double        |
-      | invoice_accounting_date | "notadate"    | date          |
-      | supplier_number         | null          | string        |
+  Scenario: Filter out excluded GL code combinations
+    Given the concat_segments field after removing '.' is in the exclusion list
+    When the pipeline processes the data
+    Then the record is excluded from the output
 
-  Scenario: Error when business logic for unfinished CTE is required
-    Given the SQL code contains an unfinished or commented-out CTE (e.g., P05)
-    When the PySpark code attempts to convert the logic
-    Then an error is raised with message "Business logic for CTE P05 is incomplete or missing"
-
-  Scenario: Error when output format or destination is not specified
-    Given the output format or destination is not provided
-    When the PySpark code attempts to write the DataFrame
-    Then an error is raised with message "Output format or destination not specified"
-
-  Scenario Outline: Successful validation of allowed values for input parameters
-    Given the input parameter "<param>" is provided with value "<allowed_value>"
-    When the PySpark code validates allowed values
-    Then the value is accepted and processing continues
+  Scenario Outline: Error handling for missing input tables
+    Given the input table "<table>" is missing or not loaded
+    When the pipeline attempts to join or reference "<table>"
+    Then an error "Input table not found: <table>" is raised
 
     Examples:
-      | param         | allowed_value |
-      | table_format  | delta         |
-      | table_format  | parquet       |
-      | compression   | snappy        |
-      | compression   | gzip          |
+      | table                        |
+      | dw_ap_sla_aging_invoice_ca   |
+      | dw_ap_sla_expense_dist_cf    |
+      | dw_party_d                   |
+      | dw_supplier_site_d           |
+      | dw_internal_org_d_tl         |
+      | dw_ap_terms_d_tl             |
+      | dw_natural_account_d         |
+      | dw_ap_sla_payments_cf        |
+      | dw_gl_segment_d_tl           |
+      | dw_gl_code_combination_d     |
+      | edp_lkup                     |
+      | dim_wf_company               |
 
-  Scenario Outline: Error when input parameter value is not allowed
-    Given the input parameter "<param>" is provided with value "<not_allowed_value>"
-    When the PySpark code validates allowed values
-    Then an error is raised with message "Value <not_allowed_value> not allowed for <param>"
+  Scenario Outline: Error handling for missing function definitions
+    Given the function "<function>" is referenced in the pipeline
+    When the function is not defined or imported
+    Then an error "Function not found: <function>" is raised
 
     Examples:
-      | param         | not_allowed_value |
-      | table_format  | csv              |
-      | compression   | lz4              |
+      | function                |
+      | get_basejob_url         |
+      | read_control_table      |
+
+  Scenario Outline: Error handling for type mismatches
+    Given the field "<field>" is expected to be of type "<expected_type>"
+    When the actual type is "<actual_type>"
+    Then an error "Type mismatch for <field>: expected <expected_type>, got <actual_type>" is raised
+
+    Examples:
+      | field                  | expected_type | actual_type |
+      | transaction_amount     | double        | string      |
+      | invoice_accounting_date| date          | string      |
+      | supplier_party_id      | string        | int         |
+
+  Scenario: Duplicate record handling
+    Given multiple records exist for the same invoice_id
+    When the pipeline applies row_number partitioning and filtering
+    Then only the latest snapshot_captured_date record is retained per invoice_id
+
+  Scenario Outline: NULL and hardcoded field logic
+    Given the field "<field>" is set to NULL or a hardcoded value "<value>"
+    When the business logic requires a different mapping
+    Then an error "Business logic missing for <field>" is raised
+    And the field "<field>" must be mapped as per updated requirements
+
+    Examples:
+      | field              | value      |
+      | document_type      | NULL       |
+      | txn_ref_nbr        | NULL       |
+      | spend_type_cd      | 'Indirect' |
+
+  Scenario: Output DataFrame write validation
+    Given the output DataFrame is ready
+    When writing to the target path with specified format and compression
+    Then the write operation completes successfully
+    And the table is registered in Unity Catalog with correct schema and partitioning
+
+  Scenario: Output DataFrame post-processing
+    Given the output DataFrame is written
+    When post-processing steps are required (e.g., table registration, view creation)
+    Then all post-processing steps are completed as per requirements
 
 # END
