@@ -1,0 +1,61 @@
+Feature: Compare data from two tables product_plant and product_plant_v2
+
+  Background:
+    Given the Unity Catalog is "purgo_databricks"
+    And the Unity Catalog Schema is "purgo_playground"
+    And the table "pp_validation_results" is dropped
+    And the table "product_plant" has the following columns:
+      | column_name | data_type |
+      | column1     | string    |
+      | column2     | integer   |
+      | column3     | boolean   |
+    And the table "product_plant_v2" has the following columns:
+      | column_name | data_type |
+      | column1     | string    |
+      | column2     | integer   |
+      | column3     | boolean   |
+
+  Scenario Outline: Compare data from two tables
+    Given the table "product_plant" has the following data:
+      | column1 | column2 | column3 |
+      | <val1>  | <val2>  | <val3>  |
+    And the table "product_plant_v2" has the following data:
+      | column1 | column2 | column3 |
+      | <val4>  | <val5>  | <val6>  |
+    When the comparison script is run
+    Then the table "pp_validation_results" is created with the following columns:
+      | column_name          | data_type |
+      | column1              | string    |
+      | column1_v2           | string    |
+      | column1_validation   | string    |
+      | column2              | integer   |
+      | column2_v2           | integer   |
+      | column2_validation   | string    |
+      | column3              | boolean   |
+      | column3_v2           | boolean   |
+      | column3_validation   | string    |
+    And the table "pp_validation_results" has the following data:
+      | column1 | column1_v2 | column1_validation | column2 | column2_v2 | column2_validation | column3 | column3_v2 | column3_validation |
+      | <val1>  | <val4>     | <result1>          | <val2>  | <val5>     | <result2>          | <val3>  | <val6>     | <result3>          |
+
+    Examples:
+      | val1 | val2 | val3 | val4 | val5 | val6 | result1    | result2    | result3    |
+      | abc  | 123  | true | abc  | 123  | true | Match      | Match      | Match      |
+      | def  | 456  | false| def  | 456  | false| Match      | Match      | Match      |
+      | ghi  | 789  | true | jkl  | 101  | false| Mismatch   | Mismatch   | Mismatch   |
+
+  Scenario: Error handling - data type mismatch
+    Given the table "product_plant" has a column "column1" with data type "string"
+    And the table "product_plant_v2" has a column "column1" with data type "integer"
+    When the comparison script is run
+    Then an error is thrown with the message "Data type mismatch for column 'column1'"
+
+  Scenario: Error handling - table not found
+    Given the table "product_plant" does not exist
+    When the comparison script is run
+    Then an error is thrown with the message "Table 'product_plant' not found"
+
+  Scenario: Error handling - column not found
+    Given the table "product_plant" does not have a column "column1"
+    When the comparison script is run
+    Then an error is thrown with the message "Column 'column1' not found in table 'product_plant'"
