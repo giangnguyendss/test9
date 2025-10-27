@@ -1,76 +1,170 @@
-Feature: Convert Spark SQL code to PySpark code
-  As a data engineer
-  I want to convert the provided Spark SQL code to PySpark code
-  So that I can use it in a production environment
+Feature: Conversion of Spark SQL logic for supplier invoice fact table to PySpark with Unity Catalog integration
 
   Background:
-    Given the Unity Catalog is "purgo_databricks"
-    And the Unity Catalog Schema is "purgo_playground"
-    And the target table path is retrieved using dbutils.widgets.get("target_table_path")
-    And the partition key is retrieved using dbutils.widgets.get("partition")
-    And the table format is retrieved using dbutils.widgets.get("table_format")
-    And the compression is retrieved using dbutils.widgets.get("compression")
-    And the table name is retrieved using dbutils.widgets.get("table_name")
-    And the unity catalog is retrieved using dbutils.widgets.get("unity_catalog")
-    And the environment is retrieved using dbutils.widgets.get("environment")
-    And the project is retrieved using dbutils.widgets.get("project")
-    And the load type is retrieved using dbutils.widgets.get("load_type")
-    And the raw unity catalog is retrieved using dbutils.widgets.get("raw_unity_catalog")
-    And the raw unity catalog hist is retrieved using dbutils.widgets.get("raw_unity_catalog_hist")
-    And the config unity catalog is retrieved using dbutils.widgets.get("config_unity_catalog")
-    And the edp lkp unity catalog is retrieved using dbutils.widgets.get("edp_lkp_unity_catalog")
-    And the dims unity catalog is retrieved using dbutils.widgets.get("dims_unity_catalog")
+    Given the Unity Catalog is set to "purgo_databricks"
+    And the Unity Catalog schema is "purgo_playground"
+    And all required input parameters are provided via dbutils.widgets
+    And reusable functions and constants are imported from DA_CCG_RSD_EU
+    And the Spark session is configured for dynamic partition overwrite
+    And the control table is read using the provided config_unity_catalog and cl_control_table
+    And the job context is set using jobId logic (with fallback if not triggered by dbutils.notebook.run)
+    And all referenced tables exist and are accessible in the Unity Catalog
 
-  Scenario: Create DataFrames for each table
-    Given the following tables:
-      | table_name |
-      | dw_ap_sla_aging_invoice_ca |
-      | dw_party_d |
-      | dw_supplier_site_d |
-      | dw_internal_org_d_tl |
-      | dw_ap_terms_d_tl |
-      | dw_natural_account_d |
-      | dw_gl_segment_d_tl |
-      | dw_gl_code_combination_d |
-      | edp_lkup |
-      | fnd_flex_values |
-      | fnd_flex_value_sets |
-      | fnd_flex_values_tl |
-    When I create a DataFrame for each table
-    Then I should have a DataFrame for each table
-
-  Scenario: Perform joins and transformations
-    Given the DataFrames created in the previous scenario
-    When I perform the joins and transformations defined in the Spark SQL code
-    Then I should have a resulting DataFrame with the correct schema and data
-
-  Scenario: Select final dataset
-    Given the resulting DataFrame from the previous scenario
-    When I select the final dataset
-    Then I should have a final DataFrame with the correct schema and data
-
-  Scenario Outline: Test different scenarios
-    Given the following input data:
-      | column1 | column2 |
-      | value1  | value2  |
-      | value3  | value4  |
-    When I run the PySpark code with the input data
-    Then I should get the expected output data:
-      | column1 | column2 |
-      | value5  | value6  |
-      | value7  | value8  |
+  Scenario Outline: Successful conversion of SQL logic to PySpark DataFrame
+    Given the following input parameters:
+      | target_table_path | partition_key | table_format | compression | table_name | unity_catalog | environment | project | load_type | view_unity_catalog_name | raw_unity_catalog | raw_unity_catalog_hist | config_unity_catalog | edp_lkp_unity_catalog | dims_unity_catalog |
+      | <target_table_path> | <partition_key> | <table_format> | <compression> | <table_name> | <unity_catalog> | <environment> | <project> | <load_type> | <view_unity_catalog_name> | <raw_unity_catalog> | <raw_unity_catalog_hist> | <config_unity_catalog> | <edp_lkp_unity_catalog> | <dims_unity_catalog> |
+    And all required functions (e.g., get_basejob_url, read_control_table) are available
+    When the PySpark code reads and transforms the following source tables:
+      | Table Name                        | Source Catalog         |
+      | dw_ap_sla_aging_invoice_ca        | <raw_unity_catalog>    |
+      | dw_ap_sla_expense_dist_cf         | <raw_unity_catalog>    |
+      | dw_party_d                        | <raw_unity_catalog>    |
+      | dw_supplier_site_d                | <raw_unity_catalog>    |
+      | dw_internal_org_d_tl              | <raw_unity_catalog>    |
+      | dw_ap_terms_d_tl                  | <raw_unity_catalog>    |
+      | dw_natural_account_d              | <raw_unity_catalog>    |
+      | dw_ap_sla_payments_cf             | <raw_unity_catalog>    |
+      | dw_gl_segment_d_tl                | <raw_unity_catalog>    |
+      | dw_gl_code_combination_d          | <raw_unity_catalog>    |
+      | edp_lkup                          | <edp_lkp_unity_catalog>|
+      | dim_wf_company                    | <dims_unity_catalog>   |
+    And the following transformations are applied:
+      | Step                                                                                 | Description                                                                                   |
+      | Window function for latest snapshot per invoice                                      | Use RowNumber partitioned by invoice_id, ordered by snapshot_captured_date DESC               |
+      | Window function for latest expense dist per distribution                             | Use RowNumber partitioned by multiple keys, ordered by xla_manual_override_flag DESC          |
+      | Join logic as per SQL (LEFT JOINs, COALESCE, CASE, etc.)                             | All joins and logic are replicated in PySpark using DataFrame API                             |
+      | Filtering by invoice_accounting_date, invoice_source_code, supplier_number, segments | All WHERE clause logic is implemented in PySpark                                              |
+      | Exclusion of specific concat_segments and supplier_numbers                           | Use .filter() and .isin()/.notin() as appropriate                                             |
+      | Null-safe logic for division code and other fields                                   | Use PySpark's when/otherwise and coalesce                                                     |
+      | All column casts and formatting (date_format, cast, concat_ws, etc.)                 | Use PySpark functions for type conversion and formatting                                      |
+    And the output DataFrame contains all required columns as per the SQL select
+    And the DataFrame is written to the target table path in the specified format and compression, partitioned by the partition key
+    Then the output table/view "<unity_catalog>.<table_name>" is created or overwritten successfully
+    And the job metadata (jobId, jobUrl) is logged for traceability
 
     Examples:
-      | column1 | column2 | value1 | value2 | value3 | value4 | value5 | value6 | value7 | value8 |
-      | foo     | bar     | 1      | 2      | 3      | 4      | 5      | 6      | 7      | 8      |
-      | foo     | bar     | 9      | 10     | 11     | 12     | 13     | 14     | 15     | 16     |
+      | target_table_path | partition_key | table_format | compression | table_name         | unity_catalog     | environment | project | load_type | view_unity_catalog_name | raw_unity_catalog | raw_unity_catalog_hist | config_unity_catalog | edp_lkp_unity_catalog | dims_unity_catalog |
+      | /mnt/fact_wf_supplier_invoice_orafin | invoice_accounting_date | delta | snappy | fact_wf_supplier_invoice_orafin | purgo_playground | prod | CCG | full | vw_fact_wf_supplier_invoice_orafin | purgo_raw | purgo_raw_hist | purgo_config | purgo_edp_lkp | purgo_dims |
+      | /mnt/fact_wf_supplier_invoice_orafin | invoice_accounting_date | parquet | gzip | fact_wf_supplier_invoice_orafin | purgo_playground | dev | CCG | incremental | vw_fact_wf_supplier_invoice_orafin | purgo_raw | purgo_raw_hist | purgo_config | purgo_edp_lkp | purgo_dims |
 
-  Scenario: Handle errors
-    Given an error occurs during the execution of the PySpark code
-    When I handle the error
-    Then I should get an error message indicating the cause of the error
+  Scenario Outline: Error when required input parameter is missing
+    Given the input parameter "<missing_param>" is not provided
+    When the PySpark code attempts to run
+    Then an error is raised with message "Missing required parameter: <missing_param>"
 
-  Scenario: Optimize performance
-    Given the PySpark code is optimized for performance
-    When I run the optimized PySpark code
-    Then I should get the expected output data in a shorter amount of time
+    Examples:
+      | missing_param              |
+      | target_table_path          |
+      | partition_key              |
+      | table_format               |
+      | compression                |
+      | table_name                 |
+      | unity_catalog              |
+      | environment                |
+      | project                    |
+      | load_type                  |
+      | view_unity_catalog_name    |
+      | raw_unity_catalog          |
+      | raw_unity_catalog_hist     |
+      | config_unity_catalog       |
+      | edp_lkp_unity_catalog      |
+      | dims_unity_catalog         |
+
+  Scenario Outline: Error when input parameter type is invalid
+    Given the input parameter "<param>" is provided with value "<invalid_value>"
+    When the PySpark code validates input types
+    Then an error is raised with message "Invalid value for <param>: <invalid_value>"
+
+    Examples:
+      | param              | invalid_value      |
+      | partition_key      | 123                |
+      | table_format       | "unsupported_fmt"  |
+      | compression        | "none"             |
+      | unity_catalog      | ""                 |
+      | table_name         | ""                 |
+
+  Scenario Outline: Error when referenced table does not exist or is inaccessible
+    Given the table "<table_name>" in catalog "<catalog>" does not exist or is inaccessible
+    When the PySpark code attempts to read the table
+    Then an error is raised with message "Table <catalog>.<table_name> not found or inaccessible"
+
+    Examples:
+      | table_name                  | catalog                |
+      | dw_ap_sla_aging_invoice_ca  | purgo_raw              |
+      | dw_ap_sla_expense_dist_cf   | purgo_raw              |
+      | dw_party_d                  | purgo_raw              |
+      | dw_supplier_site_d          | purgo_raw              |
+      | dw_internal_org_d_tl        | purgo_raw              |
+      | dw_ap_terms_d_tl            | purgo_raw              |
+      | dw_natural_account_d        | purgo_raw              |
+      | dw_ap_sla_payments_cf       | purgo_raw              |
+      | dw_gl_segment_d_tl          | purgo_raw              |
+      | dw_gl_code_combination_d    | purgo_raw              |
+      | edp_lkup                    | purgo_edp_lkp          |
+      | dim_wf_company              | purgo_dims             |
+
+  Scenario: Error when required function is missing
+    Given the function "read_control_table" is not available
+    When the PySpark code attempts to call the function
+    Then an error is raised with message "Function read_control_table not found"
+
+  Scenario: Error when required constant is missing
+    Given the constant "cl_control_table" is not defined
+    When the PySpark code attempts to use the constant
+    Then an error is raised with message "Constant cl_control_table not defined"
+
+  Scenario Outline: Error when duplicate records are found for upsert key
+    Given the upsert key "<upsert_key>" has duplicate records in the source data
+    When the PySpark code attempts to write to the target table
+    Then an error is raised with message "Duplicate records found for upsert key: <upsert_key>"
+
+    Examples:
+      | upsert_key                       |
+      | invoice_id                       |
+      | (invoice_distribution_id, invoice_id) |
+
+  Scenario Outline: Error when type mismatch occurs in transformation
+    Given the column "<column>" has value "<invalid_value>" which does not match expected type "<expected_type>"
+    When the PySpark code attempts to cast or transform the column
+    Then an error is raised with message "Type mismatch for column <column>: expected <expected_type>, got <invalid_value>"
+
+    Examples:
+      | column                  | invalid_value | expected_type |
+      | transaction_amount      | "abc"         | double        |
+      | invoice_accounting_date | "notadate"    | date          |
+      | supplier_number         | null          | string        |
+
+  Scenario: Error when business logic for unfinished CTE is required
+    Given the SQL code contains an unfinished or commented-out CTE (e.g., P05)
+    When the PySpark code attempts to convert the logic
+    Then an error is raised with message "Business logic for CTE P05 is incomplete or missing"
+
+  Scenario: Error when output format or destination is not specified
+    Given the output format or destination is not provided
+    When the PySpark code attempts to write the DataFrame
+    Then an error is raised with message "Output format or destination not specified"
+
+  Scenario Outline: Successful validation of allowed values for input parameters
+    Given the input parameter "<param>" is provided with value "<allowed_value>"
+    When the PySpark code validates allowed values
+    Then the value is accepted and processing continues
+
+    Examples:
+      | param         | allowed_value |
+      | table_format  | delta         |
+      | table_format  | parquet       |
+      | compression   | snappy        |
+      | compression   | gzip          |
+
+  Scenario Outline: Error when input parameter value is not allowed
+    Given the input parameter "<param>" is provided with value "<not_allowed_value>"
+    When the PySpark code validates allowed values
+    Then an error is raised with message "Value <not_allowed_value> not allowed for <param>"
+
+    Examples:
+      | param         | not_allowed_value |
+      | table_format  | csv              |
+      | compression   | lz4              |
+
+# END
