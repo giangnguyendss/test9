@@ -1,0 +1,76 @@
+### purgo_playground.pat_case
+## Happy path
+case_id,service_request_type,sr_created_date
+1,Patient Foundation,2022-01-01
+2,Patient Foundation,2022-01-15
+3,Patient Foundation,2022-02-01
+
+## Edge cases
+case_id,service_request_type,sr_created_date
+4,Patient Foundation,2022-01-01
+5,Patient Foundation,2022-12-31
+6,Patient Foundation,2023-01-01
+
+## Error cases
+case_id,service_request_type,sr_created_date
+7,Invalid Type,2022-01-01
+8,Patient Foundation,2024-02-30
+9,Patient Foundation,2022-13-01
+
+## NULL handling
+case_id,service_request_type,sr_created_date
+10,Patient Foundation,NULL
+11,NULL,2022-01-01
+12,Invalid Type,NULL
+
+
+### purgo_playground.sr_activity
+## Happy path
+case_id,subject,status,last_modified_date
+1,Perform New Enrollment Review Activity,Completed,2022-01-05
+2,Perform New Enrollment Review Activity,Completed,2022-01-20
+3,Perform New Enrollment Review Activity,Completed,2022-02-05
+
+## Edge cases
+case_id,subject,status,last_modified_date
+4,Perform New Enrollment Review Activity,Completed,2022-01-01
+5,Perform New Enrollment Review Activity,Completed,2022-12-31
+6,Perform New Enrollment Review Activity,Completed,2023-01-01
+
+## Error cases
+case_id,subject,status,last_modified_date
+7,Invalid Subject,Completed,2022-01-05
+8,Perform New Enrollment Review Activity,Invalid Status,2022-01-05
+9,Perform New Enrollment Review Activity,Completed,2024-02-30
+
+## NULL handling
+case_id,subject,status,last_modified_date
+10,Perform New Enrollment Review Activity,Completed,NULL
+11,NULL,Completed,2022-01-05
+12,Perform New Enrollment Review Activity,NULL,2022-01-05
+
+
+### purgo_playground.tat_report
+## Happy path
+case_id,service_request_type,sr_created_date,total_time_elapsed
+1,Patient Foundation,2022-01-01,4
+2,Patient Foundation,2022-01-15,5
+3,Patient Foundation,2022-02-01,4
+
+## Edge cases
+case_id,service_request_type,sr_created_date,total_time_elapsed
+4,Patient Foundation,2022-01-01,0
+5,Patient Foundation,2022-12-31,0
+6,Patient Foundation,2023-01-01,0
+
+## Error cases
+case_id,service_request_type,sr_created_date,total_time_elapsed
+7,Patient Foundation,2022-01-05,-4
+8,Patient Foundation,2022-01-01,NULL
+9,Patient Foundation,2022-01-01,NULL
+
+## NULL handling
+case_id,service_request_type,sr_created_date,total_time_elapsed
+10,Patient Foundation,NULL,NULL
+11,Patient Foundation,2022-01-01,NULL
+12,Patient Foundation,2022-01-01,NULL
