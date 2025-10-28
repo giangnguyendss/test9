@@ -1,37 +1,46 @@
-Feature: Calculate Total Time Elapsed (TAT) for New Enrollment Review Activity
+Feature: Calculate Total Time Elapsed (TAT) for New Enrollment Review
 
   Background:
     Given the Unity Catalog is "purgo_databricks"
     And the Unity Catalog Schema is "purgo_playground"
-    And the tables "pat_case" and "sr_activity" exist in the schema
-    And the "pat_case" table has columns "case_id", "service_request_type", and "sr_created_date"
-    And the "sr_activity" table has columns "case_id", "subject", "status", and "last_modified_date"
+    And the input data is stored in the "pat_case" and "sr_activity" tables
+    And the "pat_case" table has the columns "case_id", "service_request_type", and "sr_created_date"
+    And the "sr_activity" table has the columns "case_id", "subject", "status", and "last_modified_date"
 
-  Scenario Outline: Calculate TAT for New Enrollment Review Activity
+  Scenario Outline: Calculate TAT for New Enrollment Review
     Given the "pat_case" table has a row with "service_request_type" = "Patient Foundation" and "sr_created_date" = "<start_date>"
-    And the "sr_activity" table has a row with "subject" = "Perform New Enrollment Review Activity", "status" = "Completed", and "last_modified_date" = "<end_date>" for the same "case_id"
-    When the TAT calculation is performed
-    Then the "total_time_elapsed" is calculated as "<end_date>" - "<start_date>" (date only) and adjusted for weekends
-    And the result is loaded into the "tat_report" table with all columns from the "pat_case" table
+    And the "sr_activity" table has a row with "subject" = "Perform New Enrollment Review Activity", "status" = "Completed", and "last_modified_date" = "<end_date>" for the corresponding "case_id"
+    When the TAT is calculated
+    Then the "total_time_elapsed" is calculated as the difference between the end date and the start date, considering only the date value
+    And the "total_time_elapsed" is adjusted for weekends
+    And the result is loaded into the "tat_report" table with all columns from the "pat_case" table and the additional "total_time_elapsed" column
 
-  Examples:
-    | start_date  | end_date    | total_time_elapsed |
-    | 2022-01-01  | 2022-01-05  | 4                   |
-    | 2022-01-01  | 2022-01-01  | 0                   |
-    | 2022-01-05  | 2022-01-01  | NULL                |
-    | NULL        | 2022-01-05  | NULL                |
-    | 2022-01-01  | NULL        | NULL                |
+    Examples:
+      | start_date | end_date  | total_time_elapsed |
+      | 2022-01-01 | 2022-01-05 | 4                   |
+      | 2022-01-01 | 2022-01-01 | 0                   |
+      | 2022-01-05 | 2022-01-01 | NULL                |
+      | NULL       | 2022-01-05 | NULL                |
+      | 2022-01-01 | NULL       | NULL                |
 
-  Scenario: Handle invalid dates
-    Given the "pat_case" table has a row with "service_request_type" = "Patient Foundation" and "sr_created_date" = "invalid_date"
-    And the "sr_activity" table has a row with "subject" = "Perform New Enrollment Review Activity", "status" = "Completed", and "last_modified_date" = "2022-01-05" for the same "case_id"
-    When the TAT calculation is performed
-    Then the "total_time_elapsed" is NULL
-    And an error message is logged "Invalid date format for sr_created_date"
-
-  Scenario: Handle missing data
+  Scenario: Handle multiple "sr_activity" rows with the same "case_id" and "last_modified_date"
     Given the "pat_case" table has a row with "service_request_type" = "Patient Foundation" and "sr_created_date" = "2022-01-01"
-    And the "sr_activity" table does not have a row with "subject" = "Perform New Enrollment Review Activity" and "status" = "Completed" for the same "case_id"
-    When the TAT calculation is performed
+    And the "sr_activity" table has multiple rows with "subject" = "Perform New Enrollment Review Activity", "status" = "Completed", and "last_modified_date" = "2022-01-05" for the corresponding "case_id"
+    When the TAT is calculated
+    Then the "total_time_elapsed" is calculated using the minimum "last_modified_date" from the "sr_activity" table
+
+  Scenario: Handle cases where the "pat_case" table has no matching rows in the "sr_activity" table
+    Given the "pat_case" table has a row with "service_request_type" = "Patient Foundation" and "sr_created_date" = "2022-01-01"
+    And the "sr_activity" table has no rows with "subject" = "Perform New Enrollment Review Activity" and "status" = "Completed" for the corresponding "case_id"
+    When the TAT is calculated
     Then the "total_time_elapsed" is NULL
-    And an error message is logged "No matching row found in sr_activity table"
+
+  Scenario: Validate input data format
+    Given the input data is in an invalid format
+    When the TAT is calculated
+    Then an error is thrown with the message "Invalid input data format"
+
+  Scenario: Validate "case_id" column as primary key
+    Given the "case_id" column is not the primary key in either the "pat_case" or "sr_activity" tables
+    When the TAT is calculated
+    Then an error is thrown with the message "Invalid primary key"
